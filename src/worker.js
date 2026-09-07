@@ -2,8 +2,19 @@ const KIS_BASE = "https://openapi.koreainvestment.com:9443";
 const DART_BASE = "https://opendart.fss.or.kr/api";
 const KRX_BASE = "https://data-dbg.krx.co.kr/svc/apis";
 const ECOS_BASE = "https://ecos.bok.or.kr/api";
+const APP_VERSION = "0.2.0";
+
+const REQUIRED_BINDINGS = [
+  "APP_ACCESS_KEY",
+  "DART_API_KEY",
+  "KIS_APP_KEY",
+  "KIS_APP_SECRET",
+  "KRX_AUTH_KEY",
+  "ECOS_API_KEY",
+];
 
 let kisTokenCache = null;
+let kisTokenPromise = null;
 
 export default {
   async fetch(request, env) {
@@ -18,51 +29,78 @@ export default {
         return json({
           ok: true,
           app: "FF Value Hunter",
-          version: "0.1.0",
-          authRequired: Boolean(env.APP_ACCESS_KEY),
+          version: APP_VERSION,
+          authRequired: hasBinding(env, "APP_ACCESS_KEY"),
         });
       }
 
       assertAccess(request, env);
 
       if (url.pathname === "/api/config-status") {
+        const configured = {
+          access: hasBinding(env, "APP_ACCESS_KEY"),
+          dart: hasBinding(env, "DART_API_KEY"),
+          kis: hasBinding(env, "KIS_APP_KEY") && hasBinding(env, "KIS_APP_SECRET"),
+          krx: hasBinding(env, "KRX_AUTH_KEY"),
+          ecos: hasBinding(env, "ECOS_API_KEY"),
+        };
+        const detected = REQUIRED_BINDINGS.filter((name) => hasBinding(env, name));
+        const missing = REQUIRED_BINDINGS.filter((name) => !hasBinding(env, name));
         return json({
           ok: true,
-          configured: {
-            dart: Boolean(env.DART_API_KEY),
-            kis: Boolean(env.KIS_APP_KEY && env.KIS_APP_SECRET),
-            krx: Boolean(env.KRX_AUTH_KEY),
-            ecos: Boolean(env.ECOS_API_KEY),
-          },
-          note: "Only presence/absence is returned. Secret values are never exposed.",
+          version: APP_VERSION,
+          configured,
+          runtimeBindingsDetected: detected,
+          missing,
+          deployHint: missing.length
+            ? "Cloudflare Settings > Variables and Secrets에서 값을 저장한 뒤 반드시 Deploy를 눌러 현재 Worker 버전에 반영하세요. GitHub 자동배포를 쓰는 경우 wrangler.jsonc의 keep_vars=true가 대시보드 Text 변수를 보존합니다."
+            : "필수 바인딩이 현재 실행 중인 Worker에서 모두 감지됩니다.",
         });
       }
 
       if (url.pathname === "/api/test/dart") {
         requireEnv(env, ["DART_API_KEY"]);
         const data = await dartCompany(env, url.searchParams.get("corp") || "00126380");
-        return json({ ok: data.status === "000", provider: "OpenDART", sample: slimDartCompany(data), rawStatus: data.status, message: data.message });
+        return json({
+          ok: data.status === "000",
+          provider: "OpenDART",
+          sample: slimDartCompany(data),
+          rawStatus: data.status,
+          message: data.message,
+        });
       }
 
       if (url.pathname === "/api/test/kis") {
         requireEnv(env, ["KIS_APP_KEY", "KIS_APP_SECRET"]);
         const code = normalizeCode(url.searchParams.get("code") || "005930");
         const data = await kisCurrentPrice(env, code);
-        return json({ ok: data.rt_cd === "0", provider: "KIS", sample: slimCurrentPrice(data.output), rawStatus: data.rt_cd, message: data.msg1 });
+        return json({
+          ok: data.rt_cd === "0",
+          provider: "KIS",
+          sample: slimCurrentPrice(data.output),
+          rawStatus: data.rt_cd,
+          message: data.msg1,
+        });
       }
 
       if (url.pathname === "/api/test/krx") {
         requireEnv(env, ["KRX_AUTH_KEY"]);
         const basDd = url.searchParams.get("date") || lastWeekdayYYYYMMDD();
         const data = await krxKospiDaily(env, basDd);
-        return json({ ok: Array.isArray(data.OutBlock_1), provider: "KRX", date: basDd, rows: data.OutBlock_1?.length || 0, sample: data.OutBlock_1?.[0] || null, raw: data });
+        return json({
+          ok: Array.isArray(data.OutBlock_1),
+          provider: "KRX",
+          date: basDd,
+          rows: data.OutBlock_1?.length || 0,
+          sample: data.OutBlock_1?.[0] || null,
+        });
       }
 
       if (url.pathname === "/api/test/ecos") {
         requireEnv(env, ["ECOS_API_KEY"]);
         const data = await ecosKeyStatistics(env, 5);
         const rows = data?.KeyStatisticList?.row || [];
-        return json({ ok: rows.length > 0, provider: "ECOS", rows: rows.length, sample: rows.slice(0, 5), raw: data });
+        return json({ ok: rows.length > 0, provider: "ECOS", rows: rows.length, sample: rows.slice(0, 5) });
       }
 
       if (url.pathname === "/api/analyze") {
@@ -70,51 +108,78 @@ export default {
         const code = normalizeCode(url.searchParams.get("code") || "005930");
         const corp = (url.searchParams.get("corp") || "").trim();
 
-        const [chartRaw, investorRaw, dailyRaw, priceRaw] = await Promise.all([
-          kisDailyChart(env, code, 160),
-          kisInvestor(env, code),
-          kisDailyPrice30(env, code),
-          kisCurrentPrice(env, code),
+        const calls = await Promise.all([
+          safeSource("일봉 차트", () => kisDailyChart(env, code, 190)),
+          safeSource("외국인·기관 수급", () => kisInvestor(env, code)),
+          safeSource("외국인 보유비율", () => kisDailyPrice30(env, code)),
+          safeSource("현재가", () => kisCurrentPrice(env, code)),
+          safeSource("연간 손익계산서", () => kisIncomeStatement(env, code, "0")),
+          safeSource("분기 손익계산서", () => kisIncomeStatement(env, code, "1")),
+          safeSource("재무비율", () => kisFinancialRatio(env, code, "0")),
         ]);
 
-        const priceOutput = priceRaw.output || {};
+        const [chartRes, investorRes, dailyRes, priceRes, annualRes, quarterRes, ratioRes] = calls;
+        if (!priceRes.ok) {
+          throw new Error(`KIS 현재가 조회 실패: ${priceRes.error}`);
+        }
+
+        const sourceErrors = calls
+          .filter((item) => !item.ok)
+          .map((item) => ({ label: item.label, error: item.error }));
+
+        const chartRaw = chartRes.value || [];
+        const investorRaw = investorRes.value || {};
+        const dailyRaw = dailyRes.value || {};
+        const priceRaw = priceRes.value || {};
+        const annualIncomeRaw = annualRes.value || {};
+        const quarterIncomeRaw = quarterRes.value || {};
+        const ratioRaw = ratioRes.value || {};
+
+        const snapshot = slimCurrentPrice(priceRaw.output || {});
         const technical = analyzeTechnical(chartRaw);
         const supply = analyzeSupply(investorRaw.output || [], dailyRaw.output || []);
-        const snapshot = slimCurrentPrice(priceOutput);
+        const finance = buildFinance(annualIncomeRaw.output || [], quarterIncomeRaw.output || [], ratioRaw.output || []);
 
         let dart = null;
         if (corp) {
-          if (!env.DART_API_KEY) {
+          if (!hasBinding(env, "DART_API_KEY")) {
             dart = { ok: false, error: "DART_API_KEY is not configured" };
+          } else if (!/^\d{8}$/.test(corp)) {
+            dart = { ok: false, error: "DART 기업고유번호는 8자리 숫자여야 합니다." };
           } else {
-            const company = await dartCompany(env, corp);
-            const financials = await dartFinancials(env, corp, String(new Date().getUTCFullYear() - 1), "11011", "CFS");
-            dart = {
-              ok: company.status === "000",
-              company: slimDartCompany(company),
-              financials: summarizeFinancials(financials?.list || []),
-              note: "If CFS is unavailable, use OFS in a later version. v0.2 will automate stock-code to DART corp-code mapping.",
-            };
+            try {
+              const company = await dartCompany(env, corp);
+              dart = {
+                ok: company.status === "000",
+                company: slimDartCompany(company),
+                message: company.message || null,
+              };
+            } catch (error) {
+              dart = { ok: false, error: error?.message || String(error) };
+            }
           }
         }
 
         return json({
           ok: true,
+          version: APP_VERSION,
           code,
           analyzedAt: new Date().toISOString(),
           snapshot,
           technical,
           supply,
+          finance,
           dart,
-          ffVersion: "0.1",
+          sourceErrors,
+          partial: sourceErrors.length > 0,
           implementation: {
-            industry: "partial - stock industry label only; sector-index wave analysis is v0.2",
-            financial: corp ? "partial - latest annual DART snapshot" : "not run - enter DART corp code",
-            supply: "active - foreign/institution accumulation scoring",
-            technical: "active - MA20/60/120 and price location",
-            timing: "partial - 60/120-day zone only",
+            industry: "종목 업종명 표시. 업종지수 파도 스캐너는 다음 단계에서 추가",
+            financial: "KIS 연간 3개년/최근 4개 분기 + 유보율/부채비율",
+            supply: "외국인·기관 누적 순매수와 지속성 가점",
+            technical: "일봉 + MA20/60/120 + 현재 위치",
+            timing: "60~120일선 구간 및 MA120 이탈 여부 표시",
           },
-          warning: "This is a screening/analysis tool, not an automatic trading or order system.",
+          warning: "기업 선별을 돕는 분석 도구이며 자동주문 기능은 포함하지 않습니다.",
         });
       }
 
@@ -125,20 +190,42 @@ export default {
   },
 };
 
+async function safeSource(label, fn) {
+  try {
+    return { ok: true, label, value: await fn(), error: null };
+  } catch (error) {
+    return { ok: false, label, value: null, error: error?.message || String(error) };
+  }
+}
+
+function bindingValue(env, name) {
+  const value = env?.[name];
+  if (typeof value === "string") return value.trim();
+  return value || null;
+}
+
+function hasBinding(env, name) {
+  return Boolean(bindingValue(env, name));
+}
+
 function assertAccess(request, env) {
-  if (!env.APP_ACCESS_KEY) return;
+  const expected = bindingValue(env, "APP_ACCESS_KEY");
+  if (!expected) return;
   const supplied = request.headers.get("x-app-key") || "";
-  if (supplied !== env.APP_ACCESS_KEY) {
-    const error = new Error("Access key is missing or invalid");
+  if (supplied !== expected) {
+    const error = new Error("개인 접속키가 없거나 올바르지 않습니다.");
     error.status = 401;
     throw error;
   }
 }
 
 function requireEnv(env, keys) {
-  const missing = keys.filter((k) => !env[k]);
+  const missing = keys.filter((k) => !hasBinding(env, k));
   if (missing.length) {
-    const error = new Error(`Missing Cloudflare secret(s): ${missing.join(", ")}`);
+    const error = new Error(
+      `현재 실행 중인 Worker가 Cloudflare 변수/시크릿을 감지하지 못했습니다: ${missing.join(", ")}. ` +
+      "Settings > Variables and Secrets에서 값을 확인한 뒤 반드시 Deploy를 눌러 반영하세요."
+    );
     error.status = 500;
     throw error;
   }
@@ -158,7 +245,7 @@ function json(data, status = 200) {
 function normalizeCode(value) {
   const code = String(value || "").trim();
   if (!/^\d{6}$/.test(code)) {
-    const error = new Error("Stock code must be exactly 6 digits, e.g. 005930");
+    const error = new Error("종목코드는 6자리 숫자여야 합니다. 예: 005930");
     error.status = 400;
     throw error;
   }
@@ -172,40 +259,47 @@ async function fetchJson(url, options = {}, label = "API") {
   try {
     data = JSON.parse(text);
   } catch {
-    throw new Error(`${label} returned non-JSON response (HTTP ${res.status}): ${text.slice(0, 300)}`);
+    throw new Error(`${label}가 JSON이 아닌 응답을 반환했습니다 (HTTP ${res.status}): ${text.slice(0, 220)}`);
   }
   if (!res.ok) {
-    throw new Error(`${label} HTTP ${res.status}: ${data?.msg1 || data?.message || JSON.stringify(data).slice(0, 300)}`);
+    throw new Error(`${label} HTTP ${res.status}: ${data?.msg1 || data?.message || JSON.stringify(data).slice(0, 220)}`);
   }
   return data;
 }
 
 async function kisToken(env) {
   const now = Date.now();
-  if (kisTokenCache && kisTokenCache.expiresAt > now + 60_000) {
-    return kisTokenCache.token;
+  if (kisTokenCache && kisTokenCache.expiresAt > now + 60_000) return kisTokenCache.token;
+  if (kisTokenPromise) return kisTokenPromise;
+
+  kisTokenPromise = (async () => {
+    const data = await fetchJson(`${KIS_BASE}/oauth2/tokenP`, {
+      method: "POST",
+      headers: { "content-type": "application/json; charset=utf-8" },
+      body: JSON.stringify({
+        grant_type: "client_credentials",
+        appkey: bindingValue(env, "KIS_APP_KEY"),
+        appsecret: bindingValue(env, "KIS_APP_SECRET"),
+      }),
+    }, "KIS OAuth");
+
+    if (!data.access_token) {
+      throw new Error(`KIS 토큰 발급 실패: ${data.error_description || data.msg1 || "access_token 없음"}`);
+    }
+
+    const expiresIn = Number(data.expires_in || 21_600);
+    kisTokenCache = {
+      token: data.access_token,
+      expiresAt: Date.now() + Math.max(300, expiresIn - 120) * 1000,
+    };
+    return data.access_token;
+  })();
+
+  try {
+    return await kisTokenPromise;
+  } finally {
+    kisTokenPromise = null;
   }
-
-  const data = await fetchJson(`${KIS_BASE}/oauth2/tokenP`, {
-    method: "POST",
-    headers: { "content-type": "application/json; charset=utf-8" },
-    body: JSON.stringify({
-      grant_type: "client_credentials",
-      appkey: env.KIS_APP_KEY,
-      appsecret: env.KIS_APP_SECRET,
-    }),
-  }, "KIS OAuth");
-
-  if (!data.access_token) {
-    throw new Error(`KIS token issuance failed: ${data.error_description || data.msg1 || "no access_token"}`);
-  }
-
-  const expiresIn = Number(data.expires_in || 21_600);
-  kisTokenCache = {
-    token: data.access_token,
-    expiresAt: now + Math.max(300, expiresIn - 120) * 1000,
-  };
-  return data.access_token;
 }
 
 async function kisGet(env, path, trId, params) {
@@ -216,15 +310,15 @@ async function kisGet(env, path, trId, params) {
     headers: {
       "content-type": "application/json; charset=utf-8",
       authorization: `Bearer ${token}`,
-      appkey: env.KIS_APP_KEY,
-      appsecret: env.KIS_APP_SECRET,
+      appkey: bindingValue(env, "KIS_APP_KEY"),
+      appsecret: bindingValue(env, "KIS_APP_SECRET"),
       tr_id: trId,
       custtype: "P",
     },
   }, `KIS ${path}`);
 
   if (data.rt_cd && data.rt_cd !== "0") {
-    throw new Error(`KIS error ${data.msg_cd || data.rt_cd}: ${data.msg1 || "unknown error"}`);
+    throw new Error(`KIS 오류 ${data.msg_cd || data.rt_cd}: ${data.msg1 || "unknown error"}`);
   }
   return data;
 }
@@ -252,11 +346,27 @@ async function kisInvestor(env, code) {
   });
 }
 
-async function kisDailyChart(env, code, targetRows = 160) {
+async function kisIncomeStatement(env, code, divCode) {
+  return kisGet(env, "/uapi/domestic-stock/v1/finance/income-statement", "FHKST66430200", {
+    FID_DIV_CLS_CODE: divCode,
+    fid_cond_mrkt_div_code: "J",
+    fid_input_iscd: code,
+  });
+}
+
+async function kisFinancialRatio(env, code, divCode) {
+  return kisGet(env, "/uapi/domestic-stock/v1/finance/financial-ratio", "FHKST66430300", {
+    FID_DIV_CLS_CODE: divCode,
+    fid_cond_mrkt_div_code: "J",
+    fid_input_iscd: code,
+  });
+}
+
+async function kisDailyChart(env, code, targetRows = 190) {
   const collected = new Map();
   let end = new Date();
 
-  for (let page = 0; page < 3 && collected.size < targetRows; page++) {
+  for (let page = 0; page < 4 && collected.size < targetRows; page++) {
     const start = new Date(end);
     start.setUTCDate(start.getUTCDate() - 220);
 
@@ -288,38 +398,27 @@ async function kisDailyChart(env, code, targetRows = 160) {
 
 async function dartCompany(env, corpCode) {
   if (!/^\d{8}$/.test(String(corpCode))) {
-    const error = new Error("DART corp code must be exactly 8 digits, e.g. 00126380");
+    const error = new Error("DART 기업고유번호는 8자리 숫자여야 합니다. 예: 00126380");
     error.status = 400;
     throw error;
   }
-  const qs = new URLSearchParams({ crtfc_key: env.DART_API_KEY, corp_code: corpCode });
+  const qs = new URLSearchParams({ crtfc_key: bindingValue(env, "DART_API_KEY"), corp_code: corpCode });
   return fetchJson(`${DART_BASE}/company.json?${qs}`, {}, "OpenDART company");
-}
-
-async function dartFinancials(env, corpCode, year, reprtCode = "11011", fsDiv = "CFS") {
-  const qs = new URLSearchParams({
-    crtfc_key: env.DART_API_KEY,
-    corp_code: corpCode,
-    bsns_year: year,
-    reprt_code: reprtCode,
-    fs_div: fsDiv,
-  });
-  return fetchJson(`${DART_BASE}/fnlttSinglAcntAll.json?${qs}`, {}, "OpenDART financials");
 }
 
 async function krxKospiDaily(env, basDd) {
   if (!/^\d{8}$/.test(String(basDd))) {
-    const error = new Error("KRX date must be YYYYMMDD");
+    const error = new Error("KRX 날짜는 YYYYMMDD 형식이어야 합니다.");
     error.status = 400;
     throw error;
   }
   return fetchJson(`${KRX_BASE}/sto/stk_bydd_trd?basDd=${basDd}`, {
-    headers: { AUTH_KEY: env.KRX_AUTH_KEY },
+    headers: { AUTH_KEY: bindingValue(env, "KRX_AUTH_KEY") },
   }, "KRX KOSPI daily");
 }
 
 async function ecosKeyStatistics(env, count = 5) {
-  return fetchJson(`${ECOS_BASE}/KeyStatisticList/${encodeURIComponent(env.ECOS_API_KEY)}/json/kr/1/${count}`, {}, "ECOS KeyStatisticList");
+  return fetchJson(`${ECOS_BASE}/KeyStatisticList/${encodeURIComponent(bindingValue(env, "ECOS_API_KEY"))}/json/kr/1/${count}`, {}, "ECOS KeyStatisticList");
 }
 
 function analyzeTechnical(rows) {
@@ -327,13 +426,16 @@ function analyzeTechnical(rows) {
     .map((r) => ({
       date: r.stck_bsop_date,
       close: num(r.stck_clpr),
+      open: num(r.stck_oprc),
+      high: num(r.stck_hgpr),
+      low: num(r.stck_lwpr),
       volume: num(r.acml_vol),
     }))
     .filter((r) => r.date && Number.isFinite(r.close) && r.close > 0)
     .sort((a, b) => a.date.localeCompare(b.date));
 
   if (clean.length < 120) {
-    return { ok: false, rows: clean.length, message: "At least 120 trading days are required for MA120 analysis." };
+    return { ok: false, rows: clean.length, message: "MA120 분석을 위해 최소 120거래일이 필요합니다.", series: [] };
   }
 
   const closes = clean.map((r) => r.close);
@@ -352,6 +454,18 @@ function analyzeTechnical(rows) {
   else if (last.close < ma120) zone = "below_ma120";
   else if (last.close < ma60) zone = "between_ma20_ma60_or_below_ma20";
 
+  const series = clean.map((row, idx) => {
+    const subset = closes.slice(0, idx + 1);
+    return {
+      date: row.date,
+      close: round(row.close),
+      ma20: subset.length >= 20 ? round(sma(subset, 20)) : null,
+      ma60: subset.length >= 60 ? round(sma(subset, 60)) : null,
+      ma120: subset.length >= 120 ? round(sma(subset, 120)) : null,
+      volume: round(row.volume),
+    };
+  }).slice(-180);
+
   return {
     ok: true,
     rows: clean.length,
@@ -367,7 +481,8 @@ function analyzeTechnical(rows) {
     wavePass: aligned && rising,
     zone,
     closeVsMa120Pct: pct(last.close, ma120),
-    rule: "close > MA20 > MA60 > MA120 and both MA60/MA120 rising over 10 trading days",
+    series,
+    rule: "현재가 > MA20 > MA60 > MA120이며 MA60·MA120이 10거래일 전보다 상승하면 정배열 상승으로 판정",
   };
 }
 
@@ -384,7 +499,7 @@ function analyzeSupply(investorRows, dailyRows) {
   const daily = (dailyRows || [])
     .map((r) => ({
       date: r.stck_bsop_date,
-      foreignExhaustion: num(r.hts_frgn_ehrt),
+      foreignExhaustion: numOrNull(r.hts_frgn_ehrt),
       foreignNet: num(r.frgn_ntby_qty),
     }))
     .filter((r) => r.date)
@@ -405,7 +520,9 @@ function analyzeSupply(investorRows, dailyRows) {
 
   const newestRate = daily[0]?.foreignExhaustion;
   const oldestRate = daily[Math.min(daily.length, 30) - 1]?.foreignExhaustion;
-  const foreignHoldingRateDelta = Number.isFinite(newestRate) && Number.isFinite(oldestRate) ? round(newestRate - oldestRate, 2) : null;
+  const foreignHoldingRateDelta = Number.isFinite(newestRate) && Number.isFinite(oldestRate)
+    ? round(newestRate - oldestRate, 2)
+    : null;
 
   let score = 0;
   if (f5 > 0) score += 5;
@@ -423,13 +540,12 @@ function analyzeSupply(investorRows, dailyRows) {
 
   if (f20 > 0 && i20 > 0) score += 5;
   if (bothPositive20 >= 8) score += 5;
-
   score = Math.min(100, score);
 
-  let label = "weak_or_mixed";
-  if (score >= 80) label = "strong_accumulation";
-  else if (score >= 60) label = "accumulation";
-  else if (score >= 40) label = "watch";
+  let label = "혼조/약함";
+  if (score >= 80) label = "강한 매집";
+  else if (score >= 60) label = "매집 우위";
+  else if (score >= 40) label = "관찰";
 
   return {
     ok: rows.length > 0,
@@ -452,14 +568,111 @@ function analyzeSupply(investorRows, dailyRows) {
       net30d: i30,
       positiveDays20: iPositive20,
       currentPositiveStreak: iStreak,
-      holdingTrendMethod: "Cumulative net buying proxy; direct institution holding history is not supplied by this endpoint.",
+      holdingTrendMethod: "기관 직접 보유량 시계열 대신 누적 순매수를 대용지표로 사용",
     },
     joint: {
       bothPositiveDays20: bothPositive20,
       bothNetPositive20d: f20 > 0 && i20 > 0,
     },
-    scoreRule: "Persistent foreign/institution accumulation is weighted more heavily than one-day buying; foreign holding-rate trend also receives bonus points.",
+    daily: rows.slice(0, 30).reverse(),
+    scoreRule: "하루 순매수보다 5·20·30일 누적, 순매수 지속일수, 외국인 보유비율 상승을 더 높게 평가",
   };
+}
+
+function buildFinance(annualRows, quarterRows, ratioRows) {
+  const annual = normalizeIncomeRows(annualRows)
+    .sort((a, b) => b.period.localeCompare(a.period))
+    .slice(0, 3);
+
+  const quarterCum = normalizeIncomeRows(quarterRows)
+    .sort((a, b) => a.period.localeCompare(b.period));
+  const annualAll = normalizeIncomeRows(annualRows)
+    .sort((a, b) => a.period.localeCompare(b.period));
+
+  const quarterStandalone = toStandaloneQuarters(quarterCum, annualAll)
+    .sort((a, b) => b.period.localeCompare(a.period))
+    .slice(0, 4);
+
+  const ratios = (ratioRows || [])
+    .map((r) => ({
+      period: normalizePeriod(r.stac_yymm),
+      reserveRatio: numOrNull(r.rsrv_rate),
+      debtRatio: numOrNull(r.lblt_rate),
+      roe: numOrNull(r.roe_val),
+      revenueGrowth: numOrNull(r.grs),
+      operatingIncomeGrowth: numOrNull(r.bsop_prfi_inrt),
+      netIncomeGrowth: numOrNull(r.ntin_inrt),
+      eps: numOrNull(r.eps),
+      bps: numOrNull(r.bps),
+    }))
+    .filter((r) => r.period)
+    .sort((a, b) => b.period.localeCompare(a.period));
+
+  return {
+    annual,
+    quarterly: quarterStandalone,
+    ratios: ratios.slice(0, 3),
+    latestRatio: ratios[0] || null,
+    amountUnit: "KIS 손익계산서 원자료 단위",
+    note: "KIS 분기 손익은 연간 누적값으로 제공되므로 동일 연도 누적값의 차이를 계산해 개별 분기로 변환했습니다. 4분기는 연간값과 3분기 누적값 차이로 계산합니다.",
+  };
+}
+
+function normalizeIncomeRows(rows) {
+  return (rows || [])
+    .map((r) => ({
+      period: normalizePeriod(r.stac_yymm),
+      revenue: numOrNull(r.sale_account),
+      operatingIncome: numOrNull(r.bsop_prti),
+      netIncome: numOrNull(r.thtr_ntin),
+    }))
+    .filter((r) => r.period && r.revenue !== null);
+}
+
+function normalizePeriod(v) {
+  const s = String(v || "").replace(/[^0-9]/g, "");
+  return /^\d{6}$/.test(s) ? s : null;
+}
+
+function toStandaloneQuarters(cumulativeRows, annualRows) {
+  const byPeriod = new Map();
+  for (const row of cumulativeRows) byPeriod.set(row.period, row);
+  for (const row of annualRows) {
+    if (row.period?.endsWith("12") && !byPeriod.has(row.period)) byPeriod.set(row.period, row);
+  }
+
+  const periods = [...byPeriod.keys()].sort();
+  const result = [];
+  for (const period of periods) {
+    const year = period.slice(0, 4);
+    const month = Number(period.slice(4, 6));
+    if (![3, 6, 9, 12].includes(month)) continue;
+    const current = byPeriod.get(period);
+    const prevMonth = month - 3;
+    const prevPeriod = prevMonth > 0 ? `${year}${String(prevMonth).padStart(2, "0")}` : null;
+    const prev = prevPeriod ? byPeriod.get(prevPeriod) : null;
+
+    const isQ1 = month === 3;
+    const revenue = isQ1 ? current.revenue : diffMetric(current.revenue, prev?.revenue);
+    const operatingIncome = isQ1 ? current.operatingIncome : diffMetric(current.operatingIncome, prev?.operatingIncome);
+    const netIncome = isQ1 ? current.netIncome : diffMetric(current.netIncome, prev?.netIncome);
+
+    if (revenue === null && operatingIncome === null) continue;
+    result.push({
+      period,
+      label: `${year} Q${month / 3}`,
+      revenue,
+      operatingIncome,
+      netIncome,
+      convertedFromCumulative: !isQ1,
+    });
+  }
+  return result;
+}
+
+function diffMetric(a, b) {
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  return a - b;
 }
 
 function slimCurrentPrice(o = {}) {
@@ -490,26 +703,6 @@ function slimDartCompany(d = {}) {
     corpClass: d.corp_cls || null,
     industryCode: d.induty_code || null,
     fiscalMonth: d.acc_mt || null,
-  };
-}
-
-function summarizeFinancials(rows) {
-  const normalized = (rows || []).map((r) => ({
-    name: r.account_nm,
-    amount: numOrNull(r.thstrm_amount),
-    before: numOrNull(r.frmtrm_amount),
-    statement: r.sj_nm,
-    fsDiv: r.fs_div,
-  }));
-
-  const pick = (patterns) => normalized.find((r) => patterns.some((p) => p.test(String(r.name || "")))) || null;
-  return {
-    revenue: pick([/^매출액$/, /수익\(매출액\)/, /^영업수익$/]),
-    operatingIncome: pick([/^영업이익/, /^영업이익\(손실\)/]),
-    netIncome: pick([/^당기순이익/, /^당기순이익\(손실\)/]),
-    assets: pick([/^자산총계$/]),
-    liabilities: pick([/^부채총계$/]),
-    equity: pick([/^자본총계$/]),
   };
 }
 

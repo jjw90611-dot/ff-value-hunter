@@ -16,17 +16,18 @@
       <div class="pillrow">
         <span class="pill">자동주문 없음</span>
         <span class="pill">호가창 없음</span>
-        <span class="pill">장기 기업분석 중심</span>
+        <span class="pill">외국인·기관 지속매집 가점</span>
+        <span class="pill">v0.2</span>
       </div>
     </header>
 
     <section class="panel access-panel">
       <div>
         <h2>1. 개인 접속키</h2>
-        <p>Cloudflare에 <code>APP_ACCESS_KEY</code>를 등록했다면 여기에 같은 값을 입력하세요. 브라우저 세션에만 저장됩니다.</p>
+        <p>Cloudflare의 <code>APP_ACCESS_KEY</code>와 같은 값을 입력하세요. 브라우저 세션에만 저장됩니다.</p>
       </div>
       <div class="access-row">
-        <input id="accessKey" type="password" placeholder="APP_ACCESS_KEY (선택)" autocomplete="off" />
+        <input id="accessKey" type="password" placeholder="APP_ACCESS_KEY" autocomplete="off" />
         <button id="saveAccess">적용</button>
       </div>
       <div id="accessMsg" class="small muted"></div>
@@ -36,18 +37,27 @@
       <div class="section-head">
         <div>
           <h2>2. API 연결 점검</h2>
-          <p>DART / 한국투자 KIS / KRX / 한국은행 ECOS가 실제로 응답하는지 확인합니다.</p>
+          <p>현재 실행 중인 Worker가 Cloudflare 변수/시크릿을 실제로 인식하는지 먼저 확인합니다.</p>
         </div>
         <button id="testAll" class="primary">전체 연결 점검</button>
       </div>
+      <div id="deployNotice" class="deploy-notice hidden"></div>
       <div id="apiCards" class="cards"></div>
+      <details class="diagnostic">
+        <summary>Cloudflare 연결 문제 해결 보기</summary>
+        <div class="diagnostic-body">
+          <p><b>중요:</b> Variables and Secrets에 값을 입력한 것만으로 끝나지 않습니다. 편집 화면에서 <b>Deploy</b>를 눌러 현재 Worker 버전에 반영해야 합니다.</p>
+          <p><code>APP_ACCESS_KEY</code>, <code>DART_API_KEY</code>, <code>ECOS_API_KEY</code>, <code>KIS_APP_KEY</code>, <code>KIS_APP_SECRET</code>, <code>KRX_AUTH_KEY</code>는 모두 Secret 타입을 권장합니다.</p>
+          <p>이 버전은 <code>keep_vars=true</code>를 넣어 GitHub 자동배포가 대시보드의 Text 변수를 덮어쓰는 문제도 줄였습니다.</p>
+        </div>
+      </details>
     </section>
 
     <section class="panel">
       <div class="section-head">
         <div>
-          <h2>3. 단일 종목 FF 기초분석</h2>
-          <p>v0.1은 수급·기술·타이밍 기반을 먼저 검증합니다. 산업지수와 전체 시장 스캐너는 v0.2에서 붙입니다.</p>
+          <h2>3. 종목 분석</h2>
+          <p>종목코드 하나로 주가·수급·3개년 실적·4개 분기 실적·유보율·부채비율을 함께 확인합니다.</p>
         </div>
       </div>
       <div class="form-grid">
@@ -62,22 +72,22 @@
         <button id="analyze" class="primary analyze-btn">분석 실행</button>
       </div>
 
-      <div id="loading" class="loading hidden">데이터를 불러오고 있습니다. KIS 일봉을 여러 구간 조회하므로 수 초 걸릴 수 있습니다.</div>
+      <div id="loading" class="loading hidden">주가·수급·재무 데이터를 함께 불러오는 중입니다. 수 초 걸릴 수 있습니다.</div>
       <div id="result" class="result hidden"></div>
     </section>
 
     <section class="panel roadmap">
-      <h2>현재 버전 범위</h2>
+      <h2>이번 버전에서 추가된 것</h2>
       <div class="road-grid">
-        <div><b>산업분석</b><span>v0.2 예정: 업종지수 MA20/60/120 + 산업 파도</span></div>
-        <div><b>재무분석</b><span>DART 최신 연간 재무 스냅샷 연결</span></div>
-        <div><b>수급분석</b><span>외국인·기관 5/20/30일 누적 + 지속성 가점</span></div>
-        <div><b>기술분석</b><span>MA20/60/120 정배열·기울기</span></div>
-        <div><b>타이밍</b><span>현재가가 60일선~120일선 사이인지 표시</span></div>
+        <div><b>Cloudflare 변수 보완</b><span>keep_vars + 현재 배포본 바인딩 진단</span></div>
+        <div><b>종목 차트</b><span>일봉 + MA20/60/120</span></div>
+        <div><b>수급 상세</b><span>외국인·기관 일별/누적 매집 확인</span></div>
+        <div><b>재무 추세</b><span>최근 3개년 + 최근 4개 분기</span></div>
+        <div><b>안정성</b><span>유보율·부채비율·ROE</span></div>
       </div>
     </section>
 
-    <footer>FF Value Hunter v0.1 · 투자판단을 대신하지 않는 기업분석 도구</footer>
+    <footer>FF Value Hunter v0.2 · 기업 선별을 돕는 가치투자 분석 도구</footer>
   </main>
   <script src="/app.js" type="module"></script>
 </body>

@@ -3,6 +3,17 @@
   "name": "ff-value-hunter",
   "main": "src/worker.js",
   "compatibility_date": "2026-09-07",
+  "keep_vars": true,
+  "secrets": {
+    "required": [
+      "APP_ACCESS_KEY",
+      "DART_API_KEY",
+      "KIS_APP_KEY",
+      "KIS_APP_SECRET",
+      "KRX_AUTH_KEY",
+      "ECOS_API_KEY"
+    ]
+  },
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",

@@ -1,0 +1,10 @@
+# Local development only. Never commit real values.
+DART_API_KEY=
+KIS_APP_KEY=
+KIS_APP_SECRET=
+KRX_AUTH_KEY=
+ECOS_API_KEY=
+
+# Strongly recommended for a personal/private analyzer.
+# If set, the browser must send the same value in x-app-key.
+APP_ACCESS_KEY=
