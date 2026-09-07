@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="color-scheme" content="light" />
+  <title>FF Value Hunter</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="wrap">
+    <header class="hero">
+      <div class="eyebrow">FIVE-FINGER VALUE INVESTING</div>
+      <h1>FF Value Hunter</h1>
+      <p>산업 → 재무 → 수급 → 기술 → 타이밍을 순서대로 확인하는 가치투자 분석기</p>
+      <div class="pillrow">
+        <span class="pill">자동주문 없음</span>
+        <span class="pill">호가창 없음</span>
+        <span class="pill">장기 기업분석 중심</span>
+      </div>
+    </header>
+
+    <section class="panel access-panel">
+      <div>
+        <h2>1. 개인 접속키</h2>
+        <p>Cloudflare에 <code>APP_ACCESS_KEY</code>를 등록했다면 여기에 같은 값을 입력하세요. 브라우저 세션에만 저장됩니다.</p>
+      </div>
+      <div class="access-row">
+        <input id="accessKey" type="password" placeholder="APP_ACCESS_KEY (선택)" autocomplete="off" />
+        <button id="saveAccess">적용</button>
+      </div>
+      <div id="accessMsg" class="small muted"></div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>2. API 연결 점검</h2>
+          <p>DART / 한국투자 KIS / KRX / 한국은행 ECOS가 실제로 응답하는지 확인합니다.</p>
+        </div>
+        <button id="testAll" class="primary">전체 연결 점검</button>
+      </div>
+      <div id="apiCards" class="cards"></div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>3. 단일 종목 FF 기초분석</h2>
+          <p>v0.1은 수급·기술·타이밍 기반을 먼저 검증합니다. 산업지수와 전체 시장 스캐너는 v0.2에서 붙입니다.</p>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label>
+          <span>종목코드</span>
+          <input id="stockCode" value="005930" maxlength="6" inputmode="numeric" />
+        </label>
+        <label>
+          <span>DART 기업고유번호 <em>선택</em></span>
+          <input id="corpCode" value="00126380" maxlength="8" inputmode="numeric" />
+        </label>
+        <button id="analyze" class="primary analyze-btn">분석 실행</button>
+      </div>
+
+      <div id="loading" class="loading hidden">데이터를 불러오고 있습니다. KIS 일봉을 여러 구간 조회하므로 수 초 걸릴 수 있습니다.</div>
+      <div id="result" class="result hidden"></div>
+    </section>
+
+    <section class="panel roadmap">
+      <h2>현재 버전 범위</h2>
+      <div class="road-grid">
+        <div><b>산업분석</b><span>v0.2 예정: 업종지수 MA20/60/120 + 산업 파도</span></div>
+        <div><b>재무분석</b><span>DART 최신 연간 재무 스냅샷 연결</span></div>
+        <div><b>수급분석</b><span>외국인·기관 5/20/30일 누적 + 지속성 가점</span></div>
+        <div><b>기술분석</b><span>MA20/60/120 정배열·기울기</span></div>
+        <div><b>타이밍</b><span>현재가가 60일선~120일선 사이인지 표시</span></div>
+      </div>
+    </section>
+
+    <footer>FF Value Hunter v0.1 · 투자판단을 대신하지 않는 기업분석 도구</footer>
+  </main>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
