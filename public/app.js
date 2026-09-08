@@ -23,8 +23,9 @@ $("saveAccess").addEventListener("click", () => {
   if (value) sessionStorage.setItem("ff_access_key", value);
   else sessionStorage.removeItem("ff_access_key");
   accessMsg.textContent = value
-    ? "접속키를 현재 브라우저 세션에 적용했습니다."
+    ? "접속키를 현재 브라우저 세션에 적용했습니다. 산업 목록을 불러옵니다."
     : "접속키를 비웠습니다.";
+  if (value && sectorState.sectors.length === 0) setTimeout(() => loadSectorList(), 120);
 });
 
 accessKey.addEventListener("keydown", (event) => {
@@ -58,6 +59,357 @@ function drawCards() {
 }
 
 drawCards();
+
+// -----------------------------
+// v0.4 산업 → 기업 발굴 흐름
+// -----------------------------
+const sectorGrid = $("sectorGrid");
+const sectorEmpty = $("sectorEmpty");
+const sectorProgress = $("sectorProgress");
+const sectorDetail = $("sectorDetail");
+const memberTableBody = $("memberTableBody");
+const rankProgress = $("rankProgress");
+
+const sectorState = {
+  sectors: [],
+  trends: new Map(),
+  filter: "rising",
+  selected: null,
+  members: [],
+  rankings: new Map(),
+  scanning: false,
+};
+
+$("loadSectors")?.addEventListener("click", loadSectorList);
+$("scanSectors")?.addEventListener("click", scanAllSectorTrends);
+$("rankMembers")?.addEventListener("click", rankSelectedSectorMembers);
+$("sectorSearch")?.addEventListener("input", renderSectorCards);
+$("memberSearch")?.addEventListener("input", renderMembers);
+
+$("sectorFilters")?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-filter]");
+  if (!btn) return;
+  sectorState.filter = btn.dataset.filter;
+  $("sectorFilters").querySelectorAll(".chip").forEach((el) => el.classList.toggle("active", el === btn));
+  renderSectorCards();
+});
+
+sectorGrid?.addEventListener("click", (event) => {
+  const card = event.target.closest("[data-sector-id]");
+  if (!card) return;
+  const sector = sectorState.sectors.find((x) => x.id === card.dataset.sectorId);
+  if (sector) openSector(sector);
+});
+
+memberTableBody?.addEventListener("click", (event) => {
+  const detailButton = event.target.closest("[data-stock-detail]");
+  if (!detailButton) return;
+  const code = detailButton.dataset.stockDetail;
+  if (!/^\d{6}$/.test(code || "")) return;
+  $("stockCode").value = code;
+  updateNpayTopLink(code);
+  $("analyze").click();
+  document.querySelector(".stock-detail-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+
+$("sectorChartAcc")?.addEventListener("toggle", () => {
+  if (!$("sectorChartAcc").open) return;
+  const trend = sectorState.selected ? sectorState.trends.get(sectorState.selected.id) : null;
+  requestAnimationFrame(() => drawSectorChart($("sectorChart"), trend?.series || []));
+});
+
+$("stockCode")?.addEventListener("input", () => updateNpayTopLink($("stockCode").value.trim()));
+updateNpayTopLink($("stockCode")?.value || "005930");
+
+async function loadSectorList() {
+  setSectorProgress("KOSPI·KOSDAQ 업종을 불러오는 중입니다…", true);
+  $("loadSectors").disabled = true;
+  try {
+    const data = await api("/api/sectors");
+    sectorState.sectors = (data.sectors || []).map((item) => ({ ...item }));
+    sectorState.trends.clear();
+    sectorState.selected = null;
+    sectorState.members = [];
+    sectorState.rankings.clear();
+    sectorDetail.classList.add("hidden");
+    $("scanSectors").disabled = sectorState.sectors.length === 0;
+    sectorEmpty.classList.toggle("hidden", sectorState.sectors.length > 0);
+    sectorGrid.classList.toggle("hidden", sectorState.sectors.length === 0);
+    renderSectorCards();
+    const errorText = data.errors?.length ? ` · 일부 업종 조회 오류 ${data.errors.length}건` : "";
+    setSectorProgress(`${fmt(sectorState.sectors.length)}개 업종을 불러왔습니다${errorText}. ‘지속 상승 분석’을 누르면 장기 추세 순위가 완성됩니다.`, true);
+  } catch (error) {
+    sectorEmpty.classList.remove("hidden");
+    sectorGrid.classList.add("hidden");
+    sectorEmpty.innerHTML = `<b>섹터를 불러오지 못했습니다.</b><span>${escapeHtml(error.message)}<br>KIS 연결상태와 개인 접속키를 확인해주세요.</span>`;
+    setSectorProgress("", false);
+  } finally {
+    $("loadSectors").disabled = false;
+  }
+}
+
+async function scanAllSectorTrends() {
+  if (sectorState.scanning || !sectorState.sectors.length) return;
+  sectorState.scanning = true;
+  $("scanSectors").disabled = true;
+  $("loadSectors").disabled = true;
+
+  // 장기 추세는 당일 등락률과 무관하므로 모든 업종을 순차 검사합니다.
+  const sectors = [...sectorState.sectors];
+  let success = 0;
+  let failed = 0;
+  for (let i = 0; i < sectors.length; i++) {
+    const sector = sectors[i];
+    setSectorProgress(`산업 파도 분석 ${i + 1}/${sectors.length} · ${sector.name} · KIS 호출제한을 피하기 위해 순차 처리 중`, true);
+    try {
+      const q = new URLSearchParams({ market: sector.marketCode, code: sector.code });
+      const data = await api(`/api/sector-trend?${q}`);
+      sectorState.trends.set(sector.id, data.trend || null);
+      success += 1;
+    } catch (error) {
+      sectorState.trends.set(sector.id, { ok: false, score: 0, label: "조회 실패", error: error.message });
+      failed += 1;
+    }
+    if ((i + 1) % 3 === 0 || i === sectors.length - 1) renderSectorCards();
+    // 캐시 응답이어도 안정적으로 호출 간격을 둡니다.
+    await sleep(560);
+  }
+
+  sectorState.scanning = false;
+  $("scanSectors").disabled = false;
+  $("loadSectors").disabled = false;
+  const strong = sectors.filter((s) => (sectorState.trends.get(s.id)?.score || 0) >= 70).length;
+  setSectorProgress(`분석 완료 · ${success}개 성공${failed ? ` · ${failed}개 오류` : ""} · 상승추세 70점 이상 ${strong}개. 높은 점수부터 정렬했습니다.`, true);
+  renderSectorCards();
+}
+
+function renderSectorCards() {
+  if (!sectorGrid) return;
+  const keyword = ($("sectorSearch")?.value || "").trim().toLowerCase();
+  const scannedAny = sectorState.trends.size > 0;
+  let items = sectorState.sectors.filter((s) => !keyword || `${s.name} ${s.market}`.toLowerCase().includes(keyword));
+
+  if (sectorState.filter === "aligned") {
+    items = items.filter((s) => sectorState.trends.get(s.id)?.wavePass === true);
+  } else if (sectorState.filter === "rising" && scannedAny) {
+    items = items.filter((s) => {
+      const t = sectorState.trends.get(s.id);
+      return !t || (t.ok && (t.score >= 55 || t.return60d > 0));
+    });
+  }
+
+  items.sort((a, b) => {
+    const ta = sectorState.trends.get(a.id);
+    const tb = sectorState.trends.get(b.id);
+    const scoreDiff = (tb?.score ?? -1) - (ta?.score ?? -1);
+    if (scoreDiff) return scoreDiff;
+    return (b.dayPct || 0) - (a.dayPct || 0);
+  });
+
+  sectorGrid.innerHTML = items.map((s) => sectorCardHtml(s, sectorState.trends.get(s.id))).join("") || `
+    <div class="empty-state inline-empty"><b>조건에 맞는 섹터가 없습니다.</b><span>필터를 ‘전체’로 바꾸거나 검색어를 지워보세요.</span></div>`;
+}
+
+function sectorCardHtml(sector, trend) {
+  const score = trend?.ok ? trend.score : null;
+  const scoreClass = score >= 85 ? "strong" : score >= 70 ? "good" : score >= 55 ? "watch" : "neutral-card";
+  const dayClass = signClass(sector.dayPct);
+  const trendLabel = trend?.label || "장기추세 미분석";
+  const wave = trend?.wavePass ? "정배열 ✓" : trend?.ok ? "정배열 미충족" : "분석 전";
+  return `
+    <button class="sector-card ${scoreClass}" data-sector-id="${escapeHtml(sector.id)}">
+      <div class="sector-card-top">
+        <span class="market-tag ${sector.market === "KOSDAQ" ? "q" : "k"}">${escapeHtml(sector.market)}</span>
+        <span class="day-change ${dayClass}">${signedPctPlain(sector.dayPct)}</span>
+      </div>
+      <h3>${escapeHtml(sector.name)}</h3>
+      <div class="sector-score-row"><b>${score === null ? "--" : score}</b><span>/100 지속상승</span></div>
+      <div class="sector-label">${escapeHtml(trendLabel)}</div>
+      <div class="sector-mini">
+        <span>${wave}</span>
+        <span>20일 ${trend?.return20d == null ? "-" : signedPctPlain(trend.return20d)}</span>
+        <span>60일 ${trend?.return60d == null ? "-" : signedPctPlain(trend.return60d)}</span>
+      </div>
+    </button>`;
+}
+
+async function openSector(sector) {
+  sectorState.selected = sector;
+  sectorState.members = [];
+  sectorState.rankings.clear();
+  sectorDetail.classList.remove("hidden");
+  $("sectorTitle").textContent = `${sector.name} · ${sector.market}`;
+  $("sectorSubtitle").textContent = "관련기업과 재무 우량순위를 불러오는 중입니다.";
+  $("memberCount").textContent = "관련기업 불러오는 중…";
+  memberTableBody.innerHTML = `<tr><td colspan="8" class="empty-cell neutral">관련기업을 불러오는 중입니다.</td></tr>`;
+  sectorDetail.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  let trend = sectorState.trends.get(sector.id);
+  if (!trend || !trend.ok) {
+    try {
+      const q = new URLSearchParams({ market: sector.marketCode, code: sector.code });
+      const data = await api(`/api/sector-trend?${q}`);
+      trend = data.trend;
+      sectorState.trends.set(sector.id, trend);
+      renderSectorCards();
+    } catch (error) {
+      trend = { ok: false, score: 0, label: "추세 조회 실패", error: error.message };
+    }
+  }
+  renderSectorTrendSummary(sector, trend);
+
+  try {
+    const q = new URLSearchParams({ code: sector.code, name: sector.name, market: sector.marketCode });
+    const data = await api(`/api/sector-members?${q}`);
+    sectorState.members = data.members || [];
+    $("sectorSubtitle").textContent = `${data.total || sectorState.members.length}개 관련기업 · 한국투자 공식 종목 마스터 기준`;
+    $("memberCount").textContent = `관련기업 ${fmt(data.total || sectorState.members.length)}개`;
+    renderMembers();
+  } catch (error) {
+    memberTableBody.innerHTML = `<tr><td colspan="8" class="empty-cell neg">관련기업 조회 실패: ${escapeHtml(error.message)}</td></tr>`;
+    $("sectorSubtitle").textContent = "관련기업 조회에 실패했습니다.";
+  }
+}
+
+function renderSectorTrendSummary(sector, trend) {
+  const box = $("sectorTrendSummary");
+  if (!box) return;
+  if (!trend?.ok) {
+    box.innerHTML = `<div class="note warning-note">장기 추세 데이터를 충분히 불러오지 못했습니다. ${escapeHtml(trend?.error || "")}</div>`;
+    return;
+  }
+  box.innerHTML = `
+    <div class="trend-metric"><span>지속상승 점수</span><b class="${trend.score >= 70 ? "good" : trend.score >= 55 ? "warn" : "neutral"}">${fmt(trend.score)}/100</b><small>${escapeHtml(trend.label)}</small></div>
+    <div class="trend-metric"><span>정배열</span><b class="${trend.wavePass ? "good" : "warn"}">${trend.wavePass ? "통과" : "관찰"}</b><small>현재가 &gt; MA20 &gt; MA60 &gt; MA120</small></div>
+    <div class="trend-metric"><span>20일</span><b class="${signClass(trend.return20d)}">${signedPctPlain(trend.return20d)}</b><small>단기 산업 파도</small></div>
+    <div class="trend-metric"><span>60일</span><b class="${signClass(trend.return60d)}">${signedPctPlain(trend.return60d)}</b><small>중기 산업 파도</small></div>
+    <div class="trend-metric"><span>120일</span><b class="${signClass(trend.return120d)}">${signedPctPlain(trend.return120d)}</b><small>장기 변화</small></div>`;
+  if ($("sectorChartAcc")?.open) requestAnimationFrame(() => drawSectorChart($("sectorChart"), trend.series || []));
+}
+
+function renderMembers() {
+  if (!memberTableBody) return;
+  const keyword = ($("memberSearch")?.value || "").trim().toLowerCase();
+  const rows = sectorState.members
+    .filter((m) => !keyword || `${m.name} ${m.code}`.toLowerCase().includes(keyword))
+    .map((m) => ({ ...m, rank: sectorState.rankings.get(m.code) || null }))
+    .sort((a, b) => {
+      const ar = a.rank;
+      const br = b.rank;
+      if (ar && br) {
+        if (br.score !== ar.score) return br.score - ar.score;
+        if (br.revenueGrowing3y !== ar.revenueGrowing3y) return Number(br.revenueGrowing3y) - Number(ar.revenueGrowing3y);
+        const ad = Number.isFinite(Number(ar.debtRatio)) ? Number(ar.debtRatio) : 999999;
+        const bd = Number.isFinite(Number(br.debtRatio)) ? Number(br.debtRatio) : 999999;
+        if (ad !== bd) return ad - bd;
+      }
+      if (br && !ar) return 1;
+      if (ar && !br) return -1;
+      return (b.marketCap || 0) - (a.marketCap || 0);
+    });
+
+  memberTableBody.innerHTML = rows.map((m, index) => memberRowHtml(m, index + 1)).join("") || `<tr><td colspan="8" class="empty-cell neutral">표시할 기업이 없습니다.</td></tr>`;
+}
+
+function memberRowHtml(m, displayRank) {
+  const r = m.rank;
+  const annual = r?.annual || [];
+  const latest = annual[0] || {};
+  const gradeClass = r?.grade === "S" || r?.grade === "A" ? "good" : r?.grade === "B" ? "warn" : "neutral";
+  const revenueText = !r ? "분석 전" : r.revenueGrowing3y ? "3년 연속 ↑" : annual.length >= 2 ? `${r.revenueTransitions || 0}/2 상승` : "자료 부족";
+  const opText = !r ? (isFiniteValue(m.operatingIncome) ? shortNumber(m.operatingIncome) : "-") : r.operatingProfitPositive3y ? "3년 흑자" : isFiniteValue(latest.operatingIncome) ? shortNumber(latest.operatingIncome) : "확인 필요";
+  const cap = isFiniteValue(m.marketCap) ? `${fmt(m.marketCap)}억` : "-";
+  return `
+    <tr class="company-row ${r?.revenueGrowing3y && Number(r.debtRatio) < 150 ? "quality-hit" : ""}">
+      <td>
+        <div class="company-cell"><span class="rank-no">${displayRank}</span><div><b>${escapeHtml(m.name)}</b><small>${escapeHtml(m.code)} · ${escapeHtml(m.market)} · 시총 ${cap}</small></div></div>
+      </td>
+      <td>${r ? `<span class="grade-badge ${gradeClass}">${escapeHtml(r.grade)}</span> <b>${fmt(r.score)}</b>` : `<span class="analysis-wait">분석 전</span>`}</td>
+      <td class="${r?.revenueGrowing3y ? "pos" : "neutral"}">${escapeHtml(revenueText)}</td>
+      <td class="${r && Number(r.debtRatio) < 150 ? "pos" : r?.debtRatio != null ? "neg" : "neutral"}">${r ? fmtPct(r.debtRatio) : "-"}</td>
+      <td>${r ? fmtPct(r.reserveRatio) : "-"}</td>
+      <td class="${signClass(r?.roe)}">${r ? fmtPct(r.roe) : (isFiniteValue(m.roe) ? fmtPct(m.roe) : "-")}</td>
+      <td class="${r?.operatingProfitPositive3y ? "pos" : "neutral"}">${escapeHtml(opText)}</td>
+      <td>
+        <div class="row-actions">
+          <a class="mini-link npay" href="${npayUrl(m.code)}" target="_blank" rel="noopener noreferrer">Npay 차트 ↗</a>
+          <button class="mini-button" data-stock-detail="${escapeHtml(m.code)}">FF 상세</button>
+        </div>
+      </td>
+    </tr>`;
+}
+
+async function rankSelectedSectorMembers() {
+  if (!sectorState.selected || !sectorState.members.length) return;
+  const btn = $("rankMembers");
+  btn.disabled = true;
+  const candidates = sectorState.members.slice(0, 60); // 관련주는 전부 표시, 재무 API 정밀분석은 대형주부터 최대 60개
+  let completed = 0;
+  let errors = 0;
+  setRankProgress(`우량순 분석 시작 · 시가총액 상위 ${candidates.length}개 기업을 순차 분석합니다.`, true);
+
+  for (let i = 0; i < candidates.length; i += 6) {
+    const batch = candidates.slice(i, i + 6);
+    try {
+      const q = new URLSearchParams({ codes: batch.map((x) => x.code).join(",") });
+      const data = await api(`/api/rank-stocks?${q}`);
+      for (const item of data.items || []) sectorState.rankings.set(item.code, item);
+      completed += batch.length;
+    } catch (error) {
+      errors += batch.length;
+    }
+    setRankProgress(`매출·안정성 분석 ${Math.min(i + batch.length, candidates.length)}/${candidates.length} · 완료 후 자동으로 우량순 재정렬됩니다.`, true);
+    renderMembers();
+    await sleep(650);
+  }
+
+  const qualityHits = [...sectorState.rankings.values()].filter((r) => r.revenueGrowing3y && Number(r.debtRatio) < 150).length;
+  setRankProgress(`우량순 분석 완료 · ${completed}개 분석${errors ? ` · ${errors}개 오류` : ""} · 3년 매출 우상향 + 부채비율 150% 미만 ${qualityHits}개`, true);
+  renderMembers();
+  btn.disabled = false;
+}
+
+function drawSectorChart(canvas, rows) {
+  if (!canvas || !rows?.length) return drawEmptyChart(canvas, "섹터 지수 데이터가 없습니다.");
+  const series = [
+    { key: "close", label: "업종지수", color: "#172b4d", width: 2.2 },
+    { key: "ma20", label: "MA20", color: "#2e7d32", width: 1.6 },
+    { key: "ma60", label: "MA60", color: "#d97706", width: 1.6 },
+    { key: "ma120", label: "MA120", color: "#7c3aed", width: 1.6 },
+  ];
+  drawLineChart(canvas, rows, series, { xKey: "date", valueFormatter: shortNumber, zeroLine: false });
+}
+
+function setSectorProgress(text, visible) {
+  if (!sectorProgress) return;
+  sectorProgress.textContent = text || "";
+  sectorProgress.classList.toggle("hidden", !visible || !text);
+}
+
+function setRankProgress(text, visible) {
+  if (!rankProgress) return;
+  rankProgress.textContent = text || "";
+  rankProgress.classList.toggle("hidden", !visible || !text);
+}
+
+function updateNpayTopLink(code) {
+  const link = $("npayTopLink");
+  if (!link) return;
+  link.href = /^\d{6}$/.test(code || "") ? npayUrl(code) : "https://finance.naver.com/";
+}
+
+function npayUrl(code) {
+  return `https://finance.naver.com/item/main.nhn?code=${encodeURIComponent(code)}`;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 접속키가 세션에 남아 있으면 진입 즉시 산업 목록부터 보여줍니다.
+if (accessKey.value.trim()) {
+  setTimeout(() => loadSectorList(), 250);
+}
 
 function setCard(id, state, text) {
   const card = $(`card-${id}`);
@@ -195,6 +547,7 @@ function renderResult(d) {
           ${identity.market ? `<span class="identity-badge market-badge">${escapeHtml(identity.market)}</span>` : ""}
           ${sectorText ? `<span class="identity-badge">${escapeHtml(sectorText)}</span>` : ""}
           ${identity.industryStandard && identity.industryStandard !== sectorText ? `<span class="identity-badge subtle">${escapeHtml(identity.industryStandard)}</span>` : ""}
+          <a class="mini-link npay" href="${npayUrl(d.code)}" target="_blank" rel="noopener noreferrer">Npay 차트 ↗</a>
         </div>
       </div>
       <div class="sub">분석시각 ${formatDateTime(d.analyzedAt)}</div>

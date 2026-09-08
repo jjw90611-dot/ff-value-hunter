@@ -2,7 +2,10 @@ const KIS_BASE = "https://openapi.koreainvestment.com:9443";
 const DART_BASE = "https://opendart.fss.or.kr/api";
 const KRX_BASE = "https://data-dbg.krx.co.kr/svc/apis";
 const ECOS_BASE = "https://ecos.bok.or.kr/api";
-const APP_VERSION = "0.3.0";
+const APP_VERSION = "0.4.0";
+const MASTER_BASE = "https://new.real.download.dws.co.kr/common/master";
+const UNIVERSE_CACHE_URL = "https://ff-value-hunter-cache.local/stock-universe-v4";
+const SECTOR_TREND_CACHE_PREFIX = "https://ff-value-hunter-cache.local/sector-trend-v4/";
 const KIS_MIN_INTERVAL_MS = 450;
 const KIS_TOKEN_CACHE_URL = "https://ff-value-hunter-token-cache.local/kis-access-token-v3";
 
@@ -133,12 +136,84 @@ export default {
         return json({ ok: rows.length > 0, provider: "ECOS", rows: rows.length, sample: rows.slice(0, 5) });
       }
 
+      if (url.pathname === "/api/sectors") {
+        requireEnv(env, ["KIS_APP_KEY", "KIS_APP_SECRET"]);
+        const [kospi, kosdaq] = await Promise.all([
+          safeSource("KOSPI 업종", () => kisIndexCategory(env, "0001", "K")),
+          safeSource("KOSDAQ 업종", () => kisIndexCategory(env, "1001", "Q")),
+        ]);
+        const sectors = [
+          ...normalizeSectorList(kospi.value, "KOSPI", "K"),
+          ...normalizeSectorList(kosdaq.value, "KOSDAQ", "Q"),
+        ].filter((item) => item.name && item.code && isUsefulSector(item));
+        return json({
+          ok: true,
+          version: APP_VERSION,
+          sectors: dedupeSectors(sectors).sort((a, b) => (b.dayPct || 0) - (a.dayPct || 0)),
+          errors: [kospi, kosdaq].filter((x) => !x.ok).map((x) => ({ label: x.label, error: x.error })),
+          note: "KIS 국내업종 구분별전체시세를 기준으로 한 공식 업종 목록입니다. 테마주는 별도 데이터가 아니라 업종/섹터 중심으로 구성합니다.",
+        });
+      }
+
+      if (url.pathname === "/api/sector-trend") {
+        requireEnv(env, ["KIS_APP_KEY", "KIS_APP_SECRET"]);
+        const code = normalizeSectorCode(url.searchParams.get("code"));
+        const market = String(url.searchParams.get("market") || "K").toUpperCase();
+        const cacheKey = `${SECTOR_TREND_CACHE_PREFIX}${market}-${code}`;
+        const cached = await cacheJsonGet(cacheKey);
+        if (cached) return json({ ...cached, cached: true });
+        const raw = await kisIndexDaily(env, code);
+        const trend = analyzeSectorTrend(raw?.output2 || raw?.output || []);
+        const payload = { ok: true, code, market, trend, cached: false };
+        await cacheJsonPut(cacheKey, payload, 60 * 60 * 4);
+        return json(payload);
+      }
+
+      if (url.pathname === "/api/sector-members") {
+        requireEnv(env, ["KIS_APP_KEY", "KIS_APP_SECRET"]);
+        const code = normalizeSectorCode(url.searchParams.get("code"));
+        const name = String(url.searchParams.get("name") || "").trim();
+        const market = String(url.searchParams.get("market") || "ALL").toUpperCase();
+        const universe = await loadStockUniverse();
+        const members = selectSectorMembers(universe, code, name, market)
+          .sort((a, b) => (b.marketCap || 0) - (a.marketCap || 0));
+        return json({
+          ok: true,
+          sector: { code, name, market },
+          total: members.length,
+          members: members.slice(0, 300),
+          note: "한국투자증권 공식 KOSPI/KOSDAQ 종목 마스터의 업종 대·중·소분류와 KRX 섹터 플래그를 사용합니다.",
+        });
+      }
+
+      if (url.pathname === "/api/rank-stocks") {
+        requireEnv(env, ["KIS_APP_KEY", "KIS_APP_SECRET"]);
+        const codes = String(url.searchParams.get("codes") || "")
+          .split(",")
+          .map((x) => x.trim())
+          .filter(Boolean)
+          .slice(0, 6)
+          .map(normalizeCode);
+        if (!codes.length) {
+          const error = new Error("분석할 종목코드가 없습니다.");
+          error.status = 400;
+          throw error;
+        }
+        const items = [];
+        for (const code of codes) {
+          const annualRes = await safeSource("연간 손익", () => kisIncomeStatement(env, code, "0"));
+          const ratioRes = await safeSource("재무비율", () => kisFinancialRatio(env, code, "0"));
+          items.push(buildStockRankItem(code, annualRes.value?.output || [], ratioRes.value?.output || [], [annualRes, ratioRes]));
+        }
+        return json({ ok: true, items });
+      }
+
       if (url.pathname === "/api/analyze") {
         requireEnv(env, ["KIS_APP_KEY", "KIS_APP_SECRET"]);
         const code = normalizeCode(url.searchParams.get("code") || "005930");
         const corp = (url.searchParams.get("corp") || "").trim();
 
-        // KIS는 호출 제한이 있으므로 v0.3부터 병렬 호출을 금지하고 순차 호출합니다.
+        // KIS는 호출 제한이 있으므로 v0.4부터 병렬 호출을 금지하고 순차 호출합니다.
         const stockInfoRes = await safeSource("기업명·업종", () => kisSearchStockInfo(env, code));
         const priceRes = await safeSource("현재가", () => kisCurrentPrice(env, code));
         if (!priceRes.ok) {
@@ -367,7 +442,7 @@ async function kisToken(env) {
     } catch (error) {
       const msg = safeErrorMessage(error);
       if (/EGW00133|1분당 1회|접근토큰 발급 잠시 후/i.test(msg)) {
-        throw new Error("KIS 접근토큰 발급은 1분당 1회 제한이 있습니다. v0.3은 발급 토큰을 재사용하도록 보완했습니다. 직전에 토큰을 발급했다면 약 60초 후 한 번만 다시 시도하세요.");
+        throw new Error("KIS 접근토큰 발급은 1분당 1회 제한이 있습니다. v0.4은 발급 토큰을 재사용하도록 보완했습니다. 직전에 토큰을 발급했다면 약 60초 후 한 번만 다시 시도하세요.");
       }
       throw error;
     }
@@ -488,6 +563,531 @@ async function kisFinancialRatio(env, code, divCode) {
   });
 }
 
+
+async function kisIndexCategory(env, inputCode, marketCls) {
+  return kisGet(env, "/uapi/domestic-stock/v1/quotations/inquire-index-category-price", "FHPUP02140000", {
+    FID_COND_MRKT_DIV_CODE: "U",
+    FID_INPUT_ISCD: inputCode,
+    FID_COND_SCR_DIV_CODE: "20214",
+    FID_MRKT_CLS_CODE: marketCls,
+    FID_BLNG_CLS_CODE: "0",
+  });
+}
+
+async function kisIndexDaily(env, sectorCode) {
+  // 기간별 업종시세 API는 명시적 시작/종료일을 받을 수 있어 장기 이동평균 계산에 더 적합합니다.
+  // 응답 건수 제한에 대비해 두 구간으로 나눠 받고 날짜로 합칩니다.
+  const end2 = new Date();
+  const start2 = new Date(end2);
+  start2.setUTCDate(start2.getUTCDate() - 220);
+  const end1 = new Date(start2);
+  end1.setUTCDate(end1.getUTCDate() - 1);
+  const start1 = new Date(end1);
+  start1.setUTCDate(start1.getUTCDate() - 260);
+
+  const first = await kisGet(env, "/uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice", "FHKUP03500100", {
+    FID_COND_MRKT_DIV_CODE: "U",
+    FID_INPUT_ISCD: sectorCode,
+    FID_INPUT_DATE_1: yyyymmdd(start1),
+    FID_INPUT_DATE_2: yyyymmdd(end1),
+    FID_PERIOD_DIV_CODE: "D",
+  });
+  const second = await kisGet(env, "/uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice", "FHKUP03500100", {
+    FID_COND_MRKT_DIV_CODE: "U",
+    FID_INPUT_ISCD: sectorCode,
+    FID_INPUT_DATE_1: yyyymmdd(start2),
+    FID_INPUT_DATE_2: yyyymmdd(end2),
+    FID_PERIOD_DIV_CODE: "D",
+  });
+
+  const byDate = new Map();
+  for (const row of [...(first?.output2 || []), ...(second?.output2 || [])]) {
+    const date = String(row.stck_bsop_date || "");
+    if (date) byDate.set(date, row);
+  }
+  return {
+    rt_cd: second?.rt_cd || first?.rt_cd || "0",
+    msg1: second?.msg1 || first?.msg1 || "",
+    output1: second?.output1 || first?.output1 || null,
+    output2: [...byDate.values()],
+  };
+}
+
+function normalizeSectorList(data, marketName, marketCode) {
+  const rows = data?.output2 || [];
+  if (!Array.isArray(rows)) return [];
+  return rows.map((r) => ({
+    id: `${marketCode}:${String(r.bstp_cls_code || "").trim()}`,
+    code: String(r.bstp_cls_code || "").trim(),
+    name: String(r.hts_kor_isnm || "").trim(),
+    market: marketName,
+    marketCode,
+    current: numOrNull(r.bstp_nmix_prpr),
+    dayChange: numOrNull(r.bstp_nmix_prdy_vrss),
+    dayPct: numOrNull(r.bstp_nmix_prdy_ctrt),
+    volume: numOrNull(r.acml_vol),
+    tradedAmount: numOrNull(r.acml_tr_pbmn),
+  }));
+}
+
+function isUsefulSector(item) {
+  const name = String(item?.name || "").replace(/\s+/g, "");
+  const code = normalizeIndustryCode(item?.code);
+  if (!name || !code) return false;
+  // 종합지수/규모지수는 산업 선택 화면에서 제외하고 실제 업종 위주로 보여줍니다.
+  if (/^(종합|대형주|중형주|소형주|우선주|코스피|코스닥|KOSPI|KOSDAQ|코스피200|코스닥150)$/i.test(name)) return false;
+  if (["1", "2", "3", "4", "1001", "2001", "3003"].includes(code)) return false;
+  return true;
+}
+
+function dedupeSectors(items) {
+  const seen = new Map();
+  for (const item of items || []) {
+    const key = `${item.marketCode}:${normalizeIndustryCode(item.code)}`;
+    if (!seen.has(key)) seen.set(key, item);
+  }
+  return [...seen.values()];
+}
+
+function normalizeSectorCode(value) {
+  const code = String(value || "").trim();
+  if (!/^\d{1,4}$/.test(code)) {
+    const error = new Error("업종코드는 1~4자리 숫자여야 합니다.");
+    error.status = 400;
+    throw error;
+  }
+  return code.padStart(4, "0");
+}
+
+function normalizeIndustryCode(value) {
+  const s = String(value || "").trim();
+  if (!s) return "";
+  const n = s.replace(/^0+/, "");
+  return n || "0";
+}
+
+function analyzeSectorTrend(rows) {
+  const clean = (rows || [])
+    .map((r) => ({
+      date: String(r.stck_bsop_date || ""),
+      close: numOrNull(r.bstp_nmix_prpr),
+      volume: numOrNull(r.acml_vol),
+    }))
+    .filter((r) => r.date && Number.isFinite(r.close) && r.close > 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  if (clean.length < 20) {
+    return { ok: false, rows: clean.length, score: 0, label: "데이터 부족", series: clean };
+  }
+
+  const closes = clean.map((r) => r.close);
+  const last = closes[closes.length - 1];
+  const ma20 = closes.length >= 20 ? sma(closes, 20) : null;
+  const ma60 = closes.length >= 60 ? sma(closes, 60) : null;
+  const ma120 = closes.length >= 120 ? sma(closes, 120) : null;
+  const ma20Ago10 = closes.length >= 30 ? sma(closes.slice(0, -10), 20) : null;
+  const ma60Ago10 = closes.length >= 70 ? sma(closes.slice(0, -10), 60) : null;
+  const ma120Ago10 = closes.length >= 130 ? sma(closes.slice(0, -10), 120) : null;
+  const ret20 = closes.length > 20 ? pct(last, closes[closes.length - 21]) : null;
+  const ret60 = closes.length > 60 ? pct(last, closes[closes.length - 61]) : null;
+  const ret120 = closes.length > 120 ? pct(last, closes[closes.length - 121]) : null;
+
+  let score = 0;
+  if (Number.isFinite(ma20) && last > ma20) score += 15;
+  if (Number.isFinite(ma20) && Number.isFinite(ma60) && ma20 > ma60) score += 20;
+  if (Number.isFinite(ma60) && Number.isFinite(ma120) && ma60 > ma120) score += 20;
+  if (Number.isFinite(ma20Ago10) && ma20 > ma20Ago10) score += 10;
+  if (Number.isFinite(ma60Ago10) && ma60 > ma60Ago10) score += 15;
+  if (Number.isFinite(ma120Ago10) && ma120 > ma120Ago10) score += 10;
+  if (Number.isFinite(ret20) && ret20 > 0) score += 5;
+  if (Number.isFinite(ret60) && ret60 > 0) score += 5;
+  score = Math.min(100, score);
+
+  const fullAligned = Number.isFinite(ma120)
+    ? last > ma20 && ma20 > ma60 && ma60 > ma120
+    : Number.isFinite(ma60) && last > ma20 && ma20 > ma60;
+  const rising = (ma20Ago10 === null || ma20 > ma20Ago10) && (ma60Ago10 === null || ma60 > ma60Ago10) && (ma120Ago10 === null || ma120 > ma120Ago10);
+  let label = "혼조/약세";
+  if (score >= 85 && fullAligned && rising) label = "강한 정배열 상승";
+  else if (score >= 70) label = "상승추세";
+  else if (score >= 55) label = "상승 전환/관찰";
+
+  return {
+    ok: true,
+    rows: clean.length,
+    date: clean.at(-1)?.date || null,
+    score,
+    label,
+    close: round(last, 2),
+    ma20: Number.isFinite(ma20) ? round(ma20, 2) : null,
+    ma60: Number.isFinite(ma60) ? round(ma60, 2) : null,
+    ma120: Number.isFinite(ma120) ? round(ma120, 2) : null,
+    ma20Slope10dPct: Number.isFinite(ma20Ago10) ? pct(ma20, ma20Ago10) : null,
+    ma60Slope10dPct: Number.isFinite(ma60Ago10) ? pct(ma60, ma60Ago10) : null,
+    ma120Slope10dPct: Number.isFinite(ma120Ago10) ? pct(ma120, ma120Ago10) : null,
+    return20d: Number.isFinite(ret20) ? round(ret20, 2) : null,
+    return60d: Number.isFinite(ret60) ? round(ret60, 2) : null,
+    return120d: Number.isFinite(ret120) ? round(ret120, 2) : null,
+    aligned: fullAligned,
+    rising,
+    wavePass: fullAligned && rising,
+    series: clean.slice(-140).map((r, idx, arr) => {
+      const globalIdx = clean.length - arr.length + idx;
+      const subset = closes.slice(0, globalIdx + 1);
+      return {
+        date: r.date,
+        close: round(r.close, 2),
+        ma20: subset.length >= 20 ? round(sma(subset, 20), 2) : null,
+        ma60: subset.length >= 60 ? round(sma(subset, 60), 2) : null,
+        ma120: subset.length >= 120 ? round(sma(subset, 120), 2) : null,
+      };
+    }),
+    rule: "현재 지수와 MA20·60·120 정배열, 각 이동평균선 기울기, 20·60일 수익률을 종합해 지속 상승 점수를 계산",
+  };
+}
+
+async function cacheJsonGet(url) {
+  try {
+    if (typeof caches === "undefined" || !caches.default) return null;
+    const hit = await caches.default.match(new Request(url));
+    return hit ? await hit.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function cacheJsonPut(url, data, ttlSeconds) {
+  try {
+    if (typeof caches === "undefined" || !caches.default) return;
+    await caches.default.put(new Request(url), new Response(JSON.stringify(data), {
+      headers: { "content-type": "application/json", "cache-control": `public, max-age=${ttlSeconds}` },
+    }));
+  } catch {
+    // 캐시 실패는 기능 실패로 보지 않습니다.
+  }
+}
+
+let universeMemoryCache = null;
+async function loadStockUniverse() {
+  if (universeMemoryCache?.length) return universeMemoryCache;
+  const cached = await cacheJsonGet(UNIVERSE_CACHE_URL);
+  if (Array.isArray(cached?.items) && cached.items.length) {
+    universeMemoryCache = cached.items;
+    return universeMemoryCache;
+  }
+
+  const [kospi, kosdaq] = await Promise.all([
+    fetchMasterMarket("kospi"),
+    fetchMasterMarket("kosdaq"),
+  ]);
+  universeMemoryCache = [...kospi, ...kosdaq];
+  await cacheJsonPut(UNIVERSE_CACHE_URL, { items: universeMemoryCache, updatedAt: new Date().toISOString() }, 60 * 60 * 12);
+  return universeMemoryCache;
+}
+
+async function fetchMasterMarket(market) {
+  const isKospi = market === "kospi";
+  const url = `${MASTER_BASE}/${market}_code.mst.zip`;
+  const res = await fetch(url, { headers: { "user-agent": "FF-Value-Hunter/0.4" } });
+  if (!res.ok) throw new Error(`KIS ${market.toUpperCase()} 종목 마스터 다운로드 실패 HTTP ${res.status}`);
+  const zipBytes = new Uint8Array(await res.arrayBuffer());
+  const mstBytes = await unzipMstFile(zipBytes);
+  let decoder;
+  try { decoder = new TextDecoder("euc-kr"); } catch { decoder = new TextDecoder("utf-8"); }
+  const text = decoder.decode(mstBytes);
+  return parseMasterText(text, isKospi ? "KOSPI" : "KOSDAQ");
+}
+
+async function unzipMstFile(bytes) {
+  // 외부 ZIP 라이브러리 없이 Worker의 DecompressionStream(deflate-raw)을 사용합니다.
+  // 중앙 디렉터리를 읽어 .mst 엔트리 하나만 해제하므로 번들/빌드 의존성을 줄입니다.
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const readU16 = (offset) => view.getUint16(offset, true);
+  const readU32 = (offset) => view.getUint32(offset, true);
+  const EOCD = 0x06054b50;
+  const CENTRAL = 0x02014b50;
+  const LOCAL = 0x04034b50;
+  let eocd = -1;
+  const floor = Math.max(0, bytes.length - 65557);
+  for (let i = bytes.length - 22; i >= floor; i--) {
+    if (readU32(i) === EOCD) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error("KIS 종목 마스터 ZIP의 중앙 디렉터리를 찾지 못했습니다.");
+
+  const totalEntries = readU16(eocd + 10);
+  let pos = readU32(eocd + 16);
+  const utf8 = new TextDecoder("utf-8");
+
+  for (let entry = 0; entry < totalEntries; entry++) {
+    if (pos + 46 > bytes.length || readU32(pos) !== CENTRAL) break;
+    const method = readU16(pos + 10);
+    const compressedSize = readU32(pos + 20);
+    const fileNameLength = readU16(pos + 28);
+    const extraLength = readU16(pos + 30);
+    const commentLength = readU16(pos + 32);
+    const localOffset = readU32(pos + 42);
+    const name = utf8.decode(bytes.slice(pos + 46, pos + 46 + fileNameLength));
+
+    if (name.toLowerCase().endsWith(".mst")) {
+      if (localOffset + 30 > bytes.length || readU32(localOffset) !== LOCAL) {
+        throw new Error("KIS 종목 마스터 ZIP의 로컬 헤더가 손상되었습니다.");
+      }
+      const localNameLength = readU16(localOffset + 26);
+      const localExtraLength = readU16(localOffset + 28);
+      const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+      const compressed = bytes.slice(dataStart, dataStart + compressedSize);
+      if (method === 0) return compressed;
+      if (method !== 8) throw new Error(`지원하지 않는 KIS 종목 마스터 ZIP 압축방식: ${method}`);
+      const decompressed = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      return new Uint8Array(await new Response(decompressed).arrayBuffer());
+    }
+    pos += 46 + fileNameLength + extraLength + commentLength;
+  }
+  throw new Error("KIS 종목 마스터 ZIP 안에 .mst 파일이 없습니다.");
+}
+
+const KOSPI_WIDTHS = [
+  2,1,4,4,4,
+  1,1,1,1,1,
+  1,1,1,1,1,
+  1,1,1,1,1,
+  1,1,1,1,1,
+  1,1,1,1,1,
+  1,9,5,5,1,
+  1,1,2,1,1,
+  1,2,2,2,3,
+  1,3,12,12,8,
+  15,21,2,7,1,
+  1,1,1,1,9,
+  9,9,5,9,8,
+  9,3,1,1,1,
+];
+const KOSDAQ_WIDTHS = [
+  2,1,
+  4,4,4,1,1,
+  1,1,1,1,1,
+  1,1,1,1,1,
+  1,1,1,1,1,
+  1,1,1,1,9,
+  5,5,1,1,1,
+  2,1,1,1,2,
+  2,2,3,1,3,
+  12,12,8,15,21,
+  2,7,1,1,1,
+  1,9,9,9,5,
+  9,8,9,3,1,
+  1,1,
+];
+
+function parseMasterText(text, market) {
+  const widths = market === "KOSPI" ? KOSPI_WIDTHS : KOSDAQ_WIDTHS;
+  // 공식 파서는 줄바꿈을 포함해 KOSPI 228/KOSDAQ 222자를 자릅니다. 여기서는 줄바꿈 제거 후 처리하므로 실제 고정폭 합(227/221)을 사용합니다.
+  const fixedLength = widths.reduce((sum, width) => sum + width, 0);
+  const out = [];
+  for (const rawLine of String(text || "").split(/\r?\n/)) {
+    const line = rawLine.replace(/\r$/, "");
+    if (line.length <= fixedLength) continue;
+    const head = line.slice(0, line.length - fixedLength);
+    const tail = line.slice(-fixedLength);
+    const codeRaw = head.slice(0, 9).trim();
+    const codeMatch = codeRaw.match(/\d{6}/);
+    const code = codeMatch ? codeMatch[0] : "";
+    if (!code) continue;
+    const name = head.slice(21).trim();
+    const fields = splitFixed(tail, widths);
+    const item = market === "KOSPI" ? masterKospiItem(code, name, fields) : masterKosdaqItem(code, name, fields);
+    if (!item) continue;
+    out.push(item);
+  }
+  return out;
+}
+
+function splitFixed(text, widths) {
+  const result = [];
+  let pos = 0;
+  for (const width of widths) {
+    result.push(text.slice(pos, pos + width).trim());
+    pos += width;
+  }
+  return result;
+}
+
+function masterKospiItem(code, name, f) {
+  const item = baseMasterItem(code, name, "KOSPI", f[2], f[3], f[4], f[59], f[60], f[62], f[63], f[64], f[65]);
+  item.flags = {
+    auto: f[15], semiconductor: f[16], bio: f[17], bank: f[18], spac: f[19], energyChem: f[20], steel: f[21], mediaComm: f[23], construction: f[24], securities: f[26], ship: f[27], insurance: f[28], transport: f[29], etp: f[12],
+  };
+  item.risk = { suspended: f[34], liquidation: f[35], managed: f[36], warning: f[37], preferred: f[54] };
+  return item;
+}
+
+function masterKosdaqItem(code, name, f) {
+  const item = baseMasterItem(code, name, "KOSDAQ", f[2], f[3], f[4], f[53], f[54], f[56], f[57], f[58], f[59]);
+  item.flags = {
+    auto: f[10], semiconductor: f[11], bio: f[12], bank: f[13], spac: f[14], energyChem: f[15], steel: f[16], mediaComm: f[18], construction: f[19], securities: f[21], ship: f[22], insurance: f[23], transport: f[24], etp: f[8],
+  };
+  item.risk = { suspended: f[29], liquidation: f[30], managed: f[31], warning: f[32], preferred: f[49] };
+  return item;
+}
+
+function baseMasterItem(code, name, market, large, medium, small, revenue, operatingIncome, netIncome, roe, refYm, marketCap) {
+  return {
+    code,
+    name,
+    market,
+    industryLarge: String(large || "").trim(),
+    industryMedium: String(medium || "").trim(),
+    industrySmall: String(small || "").trim(),
+    revenue: masterNumber(revenue),
+    operatingIncome: masterNumber(operatingIncome),
+    netIncome: masterNumber(netIncome),
+    roe: masterNumber(roe, true),
+    refYm: String(refYm || "").trim(),
+    marketCap: masterNumber(marketCap),
+  };
+}
+
+function masterNumber(value, decimal = false) {
+  const s = String(value || "").replace(/,/g, "").trim();
+  if (!s || !/^-?\d+(\.\d+)?$/.test(s)) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  return decimal ? n / 100 : n;
+}
+
+function isYesFlag(value) {
+  return ["Y", "1", "A"].includes(String(value || "").trim().toUpperCase());
+}
+
+function selectSectorMembers(universe, sectorCode, sectorName, marketCode) {
+  const target = normalizeIndustryCode(sectorCode);
+  const specialFlag = sectorSpecialFlag(sectorName);
+  const matches = [];
+  for (const item of universe || []) {
+    if (marketCode === "K" && item.market !== "KOSPI") continue;
+    if (marketCode === "Q" && item.market !== "KOSDAQ") continue;
+    if (!isInvestmentCandidate(item)) continue;
+    const exact = [item.industryLarge, item.industryMedium, item.industrySmall].some((x) => normalizeIndustryCode(x) === target);
+    const special = specialFlag ? isYesFlag(item.flags?.[specialFlag]) : false;
+    if (exact || special) matches.push(item);
+  }
+  const uniq = new Map();
+  for (const m of matches) uniq.set(m.code, m);
+  return [...uniq.values()];
+}
+
+function isInvestmentCandidate(item) {
+  if (!/^\d{6}$/.test(item.code || "")) return false;
+  if (isYesFlag(item.flags?.spac)) return false;
+  if (String(item.flags?.etp || "").trim() && String(item.flags?.etp || "").trim() !== "0") return false;
+  if (String(item.risk?.liquidation || "").trim() === "Y") return false;
+  if (String(item.risk?.managed || "").trim() === "Y") return false;
+  if (String(item.risk?.preferred || "").trim() && String(item.risk?.preferred || "").trim() !== "0") return false;
+  return true;
+}
+
+function sectorSpecialFlag(name) {
+  const n = String(name || "").replace(/\s+/g, "");
+  if (/반도체/.test(n)) return "semiconductor";
+  if (/자동차/.test(n)) return "auto";
+  if (/바이오|의약|제약/.test(n)) return "bio";
+  if (/은행/.test(n)) return "bank";
+  if (/에너지|화학/.test(n)) return "energyChem";
+  if (/철강/.test(n)) return "steel";
+  if (/미디어|통신/.test(n)) return "mediaComm";
+  if (/건설/.test(n)) return "construction";
+  if (/증권/.test(n)) return "securities";
+  if (/선박|조선/.test(n)) return "ship";
+  if (/보험/.test(n)) return "insurance";
+  if (/운송|운수/.test(n)) return "transport";
+  return null;
+}
+
+function buildStockRankItem(code, annualRows, ratioRows, callResults = []) {
+  const annual = normalizeIncomeRows(annualRows)
+    .filter((r) => r.period)
+    .sort((a, b) => b.period.localeCompare(a.period))
+    .slice(0, 3);
+  const ratios = (ratioRows || []).map((r) => ({
+    period: normalizePeriod(r.stac_yymm),
+    reserveRatio: numOrNull(r.rsrv_rate),
+    debtRatio: numOrNull(r.lblt_rate),
+    roe: numOrNull(r.roe_val),
+  })).filter((r) => r.period).sort((a, b) => b.period.localeCompare(a.period));
+  const latestRatio = ratios[0] || {};
+  const chronological = [...annual].sort((a, b) => a.period.localeCompare(b.period));
+  const revenueTransitions = countPositiveTransitions(chronological.map((x) => x.revenue));
+  const opPositiveYears = chronological.filter((x) => Number.isFinite(x.operatingIncome) && x.operatingIncome > 0).length;
+  const opTransitions = countPositiveTransitions(chronological.map((x) => x.operatingIncome));
+
+  let score = 0;
+  score += revenueTransitions * 15; // 최대 30
+  if (opPositiveYears === 3) score += 15;
+  else if (opPositiveYears === 2) score += 8;
+  if (opTransitions === 2) score += 5;
+  const debt = latestRatio.debtRatio;
+  if (Number.isFinite(debt)) {
+    if (debt < 100) score += 20;
+    else if (debt < 150) score += 15;
+    else if (debt < 200) score += 5;
+  }
+  const reserve = latestRatio.reserveRatio;
+  if (Number.isFinite(reserve)) {
+    if (reserve >= 1000) score += 10;
+    else if (reserve >= 500) score += 8;
+    else if (reserve >= 200) score += 5;
+    else if (reserve > 0) score += 2;
+  }
+  const roe = latestRatio.roe;
+  if (Number.isFinite(roe)) {
+    if (roe >= 15) score += 10;
+    else if (roe >= 10) score += 8;
+    else if (roe >= 5) score += 5;
+    else if (roe > 0) score += 2;
+  }
+  const latestAnnual = annual[0] || {};
+  const opMargin = Number.isFinite(latestAnnual.revenue) && Number.isFinite(latestAnnual.operatingIncome) && latestAnnual.revenue !== 0
+    ? (latestAnnual.operatingIncome / latestAnnual.revenue) * 100
+    : null;
+  if (Number.isFinite(opMargin)) {
+    if (opMargin >= 15) score += 10;
+    else if (opMargin >= 10) score += 8;
+    else if (opMargin >= 5) score += 5;
+    else if (opMargin > 0) score += 2;
+  }
+  score = Math.min(100, score);
+
+  let grade = "C";
+  if (score >= 85) grade = "S";
+  else if (score >= 70) grade = "A";
+  else if (score >= 55) grade = "B";
+
+  return {
+    code,
+    score,
+    grade,
+    revenueGrowing3y: chronological.length >= 3 && revenueTransitions === 2,
+    revenueTransitions,
+    operatingProfitPositive3y: chronological.length >= 3 && opPositiveYears === 3,
+    annual,
+    debtRatio: Number.isFinite(debt) ? debt : null,
+    reserveRatio: Number.isFinite(reserve) ? reserve : null,
+    roe: Number.isFinite(roe) ? roe : null,
+    operatingMargin: Number.isFinite(opMargin) ? round(opMargin, 2) : null,
+    errors: callResults.filter((x) => !x.ok).map((x) => `${x.label}: ${x.error}`),
+    scoreRule: "3개년 매출 우상향 30 + 영업이익 안정성 20 + 부채비율 20 + 유보율 10 + ROE 10 + 영업이익률 10 (최대 100, 일부 지표 미제공 시 감점)",
+  };
+}
+
+function countPositiveTransitions(values) {
+  const clean = values.map((v) => Number(v));
+  let count = 0;
+  for (let i = 1; i < clean.length; i++) {
+    if (Number.isFinite(clean[i - 1]) && Number.isFinite(clean[i]) && clean[i] > clean[i - 1]) count += 1;
+  }
+  return count;
+}
+
 async function kisDailyChart(env, code, targetRows = 190) {
   const collected = new Map();
   let end = new Date();
@@ -546,7 +1146,7 @@ async function dartCompany(env, corpCode) {
   if ([301, 302, 303, 307, 308].includes(res.status)) {
     const location = res.headers.get("location") || "";
     if (/error1\.html/i.test(location)) {
-      throw new Error("OpenDART가 Cloudflare Worker 요청을 오류 페이지로 리디렉션했습니다. v0.3에서는 이 오류가 반복되지 않도록 리디렉션을 중단하고, 기업명·업종은 KIS로 대체합니다.");
+      throw new Error("OpenDART가 Cloudflare Worker 요청을 오류 페이지로 리디렉션했습니다. v0.4에서는 이 오류가 반복되지 않도록 리디렉션을 중단하고, 기업명·업종은 KIS로 대체합니다.");
     }
     throw new Error(`OpenDART가 예상치 못한 리디렉션을 반환했습니다 (HTTP ${res.status}).`);
   }

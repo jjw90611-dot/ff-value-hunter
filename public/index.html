@@ -4,27 +4,29 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="color-scheme" content="light" />
-  <title>FF Value Hunter</title>
+  <title>FF Value Hunter · 산업부터 찾는 가치투자 스캐너</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <main class="wrap">
-    <header class="hero">
-      <div class="eyebrow">FIVE-FINGER VALUE INVESTING</div>
+    <header class="hero sector-hero">
+      <div class="eyebrow">FIVE-FINGER VALUE INVESTING · INDUSTRY FIRST</div>
       <h1>FF Value Hunter</h1>
-      <p>산업 → 재무 → 수급 → 기술 → 타이밍을 순서대로 확인하는 가치투자 분석기</p>
+      <p>종목을 먼저 검색하지 않습니다. <b>상승 산업 → 우량기업 → 수급 → 가격</b> 순서로 후보를 좁힙니다.</p>
       <div class="pillrow">
-        <span class="pill">자동주문 없음</span>
-        <span class="pill">호가창 없음</span>
+        <span class="pill">산업 파도 우선</span>
+        <span class="pill">3년 매출 성장</span>
+        <span class="pill">부채비율 150% 기준</span>
         <span class="pill">외국인·기관 지속매집 가점</span>
-        <span class="pill">v0.3</span>
+        <span class="pill">자동주문 없음</span>
+        <span class="pill">v0.4</span>
       </div>
     </header>
 
-    <section class="panel access-panel">
+    <section class="panel access-panel compact-access">
       <div>
-        <h2>1. 개인 접속키</h2>
-        <p>Cloudflare의 <code>APP_ACCESS_KEY</code>와 같은 값을 입력하세요. 브라우저 세션에만 저장됩니다.</p>
+        <h2>개인 접속</h2>
+        <p>Cloudflare의 <code>APP_ACCESS_KEY</code>를 입력합니다. 브라우저 세션에만 저장됩니다.</p>
       </div>
       <div class="access-row">
         <input id="accessKey" type="password" placeholder="APP_ACCESS_KEY" autocomplete="off" />
@@ -33,61 +35,142 @@
       <div id="accessMsg" class="small muted"></div>
     </section>
 
-    <section class="panel">
-      <div class="section-head">
+    <section class="panel sector-radar-panel">
+      <div class="section-head sector-head">
         <div>
-          <h2>2. API 연결 점검</h2>
-          <p>현재 실행 중인 Worker가 Cloudflare 변수/시크릿을 실제로 인식하는지 먼저 확인합니다.</p>
+          <div class="step-kicker">STEP 1 · 산업의 파도</div>
+          <h2>상승 산업 · 섹터 레이더</h2>
+          <p>KOSPI·KOSDAQ 공식 업종을 불러온 뒤 20·60·120일선과 기울기를 계산해 <b>계속 상승하는 섹터</b>를 위로 올립니다.</p>
         </div>
-        <button id="testAll" class="primary">전체 연결 점검</button>
+        <div class="action-row">
+          <button id="loadSectors">섹터 불러오기</button>
+          <button id="scanSectors" class="primary" disabled>지속 상승 분석</button>
+        </div>
       </div>
-      <div id="deployNotice" class="deploy-notice hidden"></div>
-      <div id="apiCards" class="cards"></div>
-      <details class="diagnostic">
-        <summary>Cloudflare 연결 문제 해결 보기</summary>
-        <div class="diagnostic-body">
-          <p><b>중요:</b> Variables and Secrets에 값을 입력한 것만으로 끝나지 않습니다. 편집 화면에서 <b>Deploy</b>를 눌러 현재 Worker 버전에 반영해야 합니다.</p>
-          <p><code>APP_ACCESS_KEY</code>, <code>DART_API_KEY</code>, <code>ECOS_API_KEY</code>, <code>KIS_APP_KEY</code>, <code>KIS_APP_SECRET</code>, <code>KRX_AUTH_KEY</code>는 모두 Secret 타입을 권장합니다.</p>
-          <p>이 버전은 <code>keep_vars=true</code>를 넣어 GitHub 자동배포가 대시보드의 Text 변수를 덮어쓰는 문제도 줄였습니다.</p>
+
+      <div class="flow-strip">
+        <span><b>①</b> 상승 섹터</span><i>→</i><span><b>②</b> 관련 기업</span><i>→</i><span><b>③</b> 매출·안정성 순위</span><i>→</i><span><b>④</b> 수급·Npay 차트 확인</span>
+      </div>
+
+      <div class="toolbar">
+        <div class="filter-chips" id="sectorFilters">
+          <button class="chip active" data-filter="rising">상승추세 우선</button>
+          <button class="chip" data-filter="aligned">정배열만</button>
+          <button class="chip" data-filter="all">전체</button>
         </div>
-      </details>
+        <input id="sectorSearch" class="search-input" placeholder="섹터 검색 · 예: 반도체, 철강" />
+      </div>
+
+      <div id="sectorProgress" class="progress-note hidden"></div>
+      <div id="sectorEmpty" class="empty-state">
+        <b>먼저 ‘섹터 불러오기’를 눌러주세요.</b>
+        <span>오늘 등락률은 바로 표시되고, ‘지속 상승 분석’을 누르면 장기 추세점수가 채워집니다.</span>
+      </div>
+      <div id="sectorGrid" class="sector-grid hidden"></div>
     </section>
 
-    <section class="panel">
+    <section id="sectorDetail" class="panel hidden">
+      <div class="section-head sector-detail-head">
+        <div>
+          <div class="step-kicker">STEP 2 · 산업 안에서 기업 찾기</div>
+          <h2 id="sectorTitle">선택 섹터</h2>
+          <p id="sectorSubtitle"></p>
+        </div>
+        <button id="rankMembers" class="primary">매출·안정성 우량순 분석</button>
+      </div>
+
+      <div id="sectorTrendSummary" class="sector-trend-summary"></div>
+      <details id="sectorChartAcc" class="accordion sector-chart-accordion">
+        <summary><span>섹터 지수 차트 · MA20 / 60 / 120</span><span class="accordion-meta">산업의 파도 확인</span></summary>
+        <div class="accordion-body">
+          <div class="chart-box"><canvas id="sectorChart" class="chart"></canvas></div>
+          <div class="legend">
+            <span class="legend-close"><i></i>업종지수</span>
+            <span class="legend-ma20"><i></i>MA20</span>
+            <span class="legend-ma60"><i></i>MA60</span>
+            <span class="legend-ma120"><i></i>MA120</span>
+          </div>
+        </div>
+      </details>
+
+      <div class="member-toolbar">
+        <div>
+          <b id="memberCount">관련기업 -</b>
+          <span class="muted">초기에는 시가총액 순. 우량분석 후 3개년 매출·부채비율·유보율·ROE를 반영해 재정렬합니다.</span>
+        </div>
+        <input id="memberSearch" class="search-input" placeholder="기업명/종목코드 검색" />
+      </div>
+      <div id="rankProgress" class="progress-note hidden"></div>
+      <div class="table-wrap company-table-wrap">
+        <table class="company-table">
+          <thead>
+            <tr>
+              <th>순위 / 기업</th>
+              <th>우량점수</th>
+              <th>3년 매출</th>
+              <th>부채비율</th>
+              <th>유보율</th>
+              <th>ROE</th>
+              <th>영업이익</th>
+              <th>차트 / 상세</th>
+            </tr>
+          </thead>
+          <tbody id="memberTableBody"></tbody>
+        </table>
+      </div>
+      <div class="note methodology-note">
+        우량점수는 <b>3개년 매출 우상향 30점 + 영업이익 안정성 20점 + 부채비율 20점 + 유보율 10점 + ROE 10점 + 영업이익률 10점</b>을 중심으로 계산합니다. 현재는 ‘기업의 질’ 순위이며, 외국인·기관 지속매집과 저평가 점수는 상세분석/다음 스캐너 단계에서 합칩니다.
+      </div>
+    </section>
+
+    <section class="panel stock-detail-panel">
       <div class="section-head">
         <div>
-          <h2>3. 종목 분석</h2>
-          <p>종목코드 하나로 주가·수급·3개년 실적·4개 분기 실적·유보율·부채비율을 함께 확인합니다.</p>
+          <div class="step-kicker">STEP 3 · 선택 기업 검증</div>
+          <h2>종목 상세분석</h2>
+          <p>섹터에서 고른 기업의 가격·외국인/기관 수급·최근 3년/4분기 실적·유보율·부채비율을 확인합니다.</p>
         </div>
       </div>
-      <div class="form-grid">
+      <div class="form-grid stock-form-grid">
         <label>
           <span>종목코드</span>
           <input id="stockCode" value="005930" maxlength="6" inputmode="numeric" />
         </label>
-        <label>
-          <span>DART 기업고유번호 <em>선택 · 비워도 분석 가능</em></span>
-          <input id="corpCode" value="" maxlength="8" inputmode="numeric" placeholder="예: 00126380" />
+        <label class="dart-field">
+          <span>DART 기업고유번호 <em>선택</em></span>
+          <input id="corpCode" value="" maxlength="8" inputmode="numeric" placeholder="비워도 분석 가능" />
         </label>
-        <button id="analyze" class="primary analyze-btn">분석 실행</button>
+        <button id="analyze" class="primary analyze-btn">상세분석</button>
+        <a id="npayTopLink" class="npay-link button-link" href="https://finance.naver.com/item/main.nhn?code=005930" target="_blank" rel="noopener noreferrer">Npay 증권 ↗</a>
       </div>
 
-      <div id="loading" class="loading hidden">KIS 호출 제한을 피하기 위해 기업정보·시세·수급·재무·차트를 순서대로 불러오는 중입니다. 약 5~10초 걸릴 수 있습니다.</div>
+      <div id="loading" class="loading hidden">KIS 호출 제한을 피하기 위해 기업정보·시세·수급·재무·차트를 순서대로 불러오는 중입니다. 잠시 기다려주세요.</div>
       <div id="result" class="result hidden"></div>
     </section>
 
-    <section class="panel roadmap">
-      <h2>v0.3 보완사항</h2>
-      <div class="road-grid">
-        <div><b>KIS 호출 제한 대응</b><span>토큰 재사용 + API 순차 호출 + 초당 제한 재시도</span></div>
-        <div><b>기업명·업종</b><span>KIS 주식기본조회로 기업/시장/섹터 표시</span></div>
-        <div><b>OpenDART 안전처리</b><span>무한 리디렉션 차단 + API 키 화면 노출 방지</span></div>
-        <div><b>연간 실적 정리</b><span>결산월 기준 최근 3개 연도만 분리</span></div>
-        <div><b>상세 탭</b><span>차트·수급·분기·재무비율은 닫힌 상태에서 선택 열람</span></div>
+    <details class="panel diagnostics-panel">
+      <summary>API 연결 상태 · 개발자 설정</summary>
+      <div class="diagnostics-inner">
+        <div class="section-head">
+          <div>
+            <h2>API 연결 점검</h2>
+            <p>종목 발굴의 핵심은 KIS입니다. DART·KRX·ECOS는 보조 데이터로 단계적으로 사용합니다.</p>
+          </div>
+          <button id="testAll">전체 연결 점검</button>
+        </div>
+        <div id="deployNotice" class="deploy-notice hidden"></div>
+        <div id="apiCards" class="cards"></div>
+        <details class="diagnostic">
+          <summary>Cloudflare 연결 문제 해결 보기</summary>
+          <div class="diagnostic-body">
+            <p><b>중요:</b> Variables and Secrets에 값을 입력한 뒤 <b>Deploy</b>를 눌러 현재 Worker 버전에 반영해야 합니다.</p>
+            <p><code>APP_ACCESS_KEY</code>, <code>DART_API_KEY</code>, <code>ECOS_API_KEY</code>, <code>KIS_APP_KEY</code>, <code>KIS_APP_SECRET</code>, <code>KRX_AUTH_KEY</code>는 Secret 타입을 권장합니다.</p>
+          </div>
+        </details>
       </div>
-    </section>
+    </details>
 
-    <footer>FF Value Hunter v0.3 · 기업 선별을 돕는 가치투자 분석 도구 · 자동주문 없음</footer>
+    <footer>FF Value Hunter v0.4 · 산업 → 기업 → 수급 → 가격 · 기업 선별 보조도구 · 자동주문 없음</footer>
   </main>
   <script src="/app.js" type="module"></script>
 </body>
