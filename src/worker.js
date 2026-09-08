@@ -2,10 +2,10 @@ const KIS_BASE = "https://openapi.koreainvestment.com:9443";
 const DART_BASE = "https://opendart.fss.or.kr/api";
 const KRX_BASE = "https://data-dbg.krx.co.kr/svc/apis";
 const ECOS_BASE = "https://ecos.bok.or.kr/api";
-const APP_VERSION = "0.5.0";
+const APP_VERSION = "0.6.0";
 const MASTER_BASE = "https://new.real.download.dws.co.kr/common/master";
-const UNIVERSE_CACHE_URL = "https://ff-value-hunter-cache.local/stock-universe-v5";
-const SECTOR_TREND_CACHE_PREFIX = "https://ff-value-hunter-cache.local/sector-trend-v5/";
+const UNIVERSE_CACHE_URL = "https://ff-value-hunter-cache.local/stock-universe-v6";
+const SECTOR_TREND_CACHE_PREFIX = "https://ff-value-hunter-cache.local/sector-trend-v6/";
 const KIS_MIN_INTERVAL_MS = 450;
 const KIS_TOKEN_CACHE_URL = "https://ff-value-hunter-token-cache.local/kis-access-token-v3";
 
@@ -122,7 +122,7 @@ export default {
               available: false,
               provider: "KRX",
               state: "approval-required",
-              message: "인증키는 감지됐지만 ‘유가증권 일별매매정보’ API 활용승인이 없거나 아직 반영되지 않았습니다. KRX는 현재 단일 종목 분석에는 필수가 아닙니다.",
+              message: "KRX_AUTH_KEY 자체는 정상 감지됐습니다. 다만 KRX는 인증키 승인과 개별 API 활용승인이 별도라서, 현재 테스트에 쓰는 ‘유가증권 일별매매정보’ 서비스가 미승인/승인대기이면 401이 납니다. KRX는 현재 FF 섹터·종목 분석의 필수 API가 아니므로 사이트 핵심 기능에는 영향이 없습니다.",
             });
           }
           return json({ ok: true, available: false, provider: "KRX", state: "unavailable", message: msg });
@@ -193,7 +193,7 @@ export default {
           sector: { code, name, market },
           total: members.length,
           members: members.slice(0, 300),
-          note: "한국투자증권 공식 KOSPI/KOSDAQ 종목 마스터의 업종 대·중·소분류와 KRX 섹터 플래그를 사용합니다.",
+          note: "한국투자증권 공식 종목 마스터의 지수업종 대분류 코드만 정확히 일치시키며, KRX 테마 플래그·중분류·소분류는 섞지 않습니다.",
         });
       }
 
@@ -687,62 +687,115 @@ function analyzeSectorTrend(rows) {
     .filter((r) => r.date && Number.isFinite(r.close) && r.close > 0)
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  if (clean.length < 20) {
-    return { ok: false, rows: clean.length, score: 0, label: "데이터 부족", series: clean };
+  if (clean.length < 40) {
+    return { ok: false, rows: clean.length, score: 0, grade: "N/A", label: "데이터 부족", series: clean };
   }
 
   const closes = clean.map((r) => r.close);
-  const last = closes[closes.length - 1];
+  const last = closes.at(-1);
   const ma20 = closes.length >= 20 ? sma(closes, 20) : null;
   const ma60 = closes.length >= 60 ? sma(closes, 60) : null;
   const ma120 = closes.length >= 120 ? sma(closes, 120) : null;
-  const ma20Ago10 = closes.length >= 30 ? sma(closes.slice(0, -10), 20) : null;
-  const ma60Ago10 = closes.length >= 70 ? sma(closes.slice(0, -10), 60) : null;
-  const ma120Ago10 = closes.length >= 130 ? sma(closes.slice(0, -10), 120) : null;
-  const ret20 = closes.length > 20 ? pct(last, closes[closes.length - 21]) : null;
-  const ret60 = closes.length > 60 ? pct(last, closes[closes.length - 61]) : null;
-  const ret120 = closes.length > 120 ? pct(last, closes[closes.length - 121]) : null;
 
-  let score = 0;
-  if (Number.isFinite(ma20) && last > ma20) score += 15;
-  if (Number.isFinite(ma20) && Number.isFinite(ma60) && ma20 > ma60) score += 20;
-  if (Number.isFinite(ma60) && Number.isFinite(ma120) && ma60 > ma120) score += 20;
-  if (Number.isFinite(ma20Ago10) && ma20 > ma20Ago10) score += 10;
-  if (Number.isFinite(ma60Ago10) && ma60 > ma60Ago10) score += 15;
-  if (Number.isFinite(ma120Ago10) && ma120 > ma120Ago10) score += 10;
-  if (Number.isFinite(ret20) && ret20 > 0) score += 5;
-  if (Number.isFinite(ret60) && ret60 > 0) score += 5;
-  score = Math.min(100, score);
+  const ma20Ago10 = closes.length >= 30 ? sma(closes.slice(0, -10), 20) : null;
+  const ma60Ago20 = closes.length >= 80 ? sma(closes.slice(0, -20), 60) : null;
+  const ma120Ago20 = closes.length >= 140 ? sma(closes.slice(0, -20), 120) : null;
+
+  const ret20 = closes.length > 20 ? pct(last, closes.at(-21)) : null;
+  const ret60 = closes.length > 60 ? pct(last, closes.at(-61)) : null;
+  const ret120 = closes.length > 120 ? pct(last, closes.at(-121)) : null;
+
+  const gapLastMa20 = Number.isFinite(ma20) ? pct(last, ma20) : null;
+  const gapMa20Ma60 = Number.isFinite(ma20) && Number.isFinite(ma60) ? pct(ma20, ma60) : null;
+  const gapMa60Ma120 = Number.isFinite(ma60) && Number.isFinite(ma120) ? pct(ma60, ma120) : null;
+
+  const slope20 = Number.isFinite(ma20Ago10) ? pct(ma20, ma20Ago10) : null;
+  const slope60 = Number.isFinite(ma60Ago20) ? pct(ma60, ma60Ago20) : null;
+  const slope120 = Number.isFinite(ma120Ago20) ? pct(ma120, ma120Ago20) : null;
+
+  const positive20 = positiveDayRatio(closes.slice(-21));
+  const positive60 = positiveDayRatio(closes.slice(-61));
+  const drawdown60 = maxDrawdownPct(closes.slice(-61));
+  const range120 = rangePositionPct(closes.slice(-121));
+
+  // v0.6: 모든 항목을 0/5/10 식의 계단 점수로 주지 않고 실제 퍼센트 값을 연속 점수로 변환합니다.
+  // 같은 정배열이라도 이격도, 기울기, 20·60·120일 수익률, 상승일 비율, 낙폭이 다르면 점수도 달라집니다.
+  const structureScore =
+    smoothBandScore(gapLastMa20, -4, 5, 8) +
+    smoothBandScore(gapMa20Ma60, -5, 9, 9) +
+    smoothBandScore(gapMa60Ma120, -8, 16, 8);
+
+  const slopeScore =
+    smoothBandScore(slope20, -3, 6, 8) +
+    smoothBandScore(slope60, -3, 8, 9) +
+    smoothBandScore(slope120, -2, 7, 8);
+
+  const momentumScore =
+    smoothBandScore(ret20, -10, 18, 8) +
+    smoothBandScore(ret60, -15, 35, 12) +
+    smoothBandScore(ret120, -25, 65, 10);
+
+  const persistenceScore =
+    clamp01(((positive20 ?? 0.5) - 0.35) / 0.35) * 5 +
+    clamp01(((positive60 ?? 0.5) - 0.38) / 0.30) * 5;
+
+  // 큰 낙폭은 감점하고, 120일 범위 상단에 안정적으로 위치하면 소폭 가점합니다.
+  const ddQuality = Number.isFinite(drawdown60) ? clamp01((drawdown60 + 28) / 23) * 6 : 3;
+  const rangeQuality = Number.isFinite(range120) ? clamp01((range120 - 35) / 55) * 4 : 2;
+  const qualityScore = ddQuality + rangeQuality;
+
+  const score = round(Math.max(0, Math.min(100,
+    structureScore + slopeScore + momentumScore + persistenceScore + qualityScore
+  )), 1);
 
   const fullAligned = Number.isFinite(ma120)
     ? last > ma20 && ma20 > ma60 && ma60 > ma120
     : Number.isFinite(ma60) && last > ma20 && ma20 > ma60;
-  const rising = (ma20Ago10 === null || ma20 > ma20Ago10) && (ma60Ago10 === null || ma60 > ma60Ago10) && (ma120Ago10 === null || ma120 > ma120Ago10);
+  const rising = (slope20 ?? 0) > 0 && (slope60 ?? 0) > 0 && (ma120 === null || (slope120 ?? 0) > 0);
+
+  let grade = "D";
   let label = "혼조/약세";
-  if (score >= 85 && fullAligned && rising) label = "강한 정배열 상승";
-  else if (score >= 70) label = "상승추세";
-  else if (score >= 55) label = "상승 전환/관찰";
+  if (score >= 90 && fullAligned && rising) { grade = "S"; label = "최상위 정배열 상승"; }
+  else if (score >= 82) { grade = "A+"; label = "강한 상승추세"; }
+  else if (score >= 74) { grade = "A"; label = "상승 우위"; }
+  else if (score >= 66) { grade = "B"; label = "완만한 상승"; }
+  else if (score >= 58) { grade = "C"; label = "상승 전환/관찰"; }
 
   return {
     ok: true,
     rows: clean.length,
     date: clean.at(-1)?.date || null,
     score,
+    grade,
     label,
     close: round(last, 2),
     ma20: Number.isFinite(ma20) ? round(ma20, 2) : null,
     ma60: Number.isFinite(ma60) ? round(ma60, 2) : null,
     ma120: Number.isFinite(ma120) ? round(ma120, 2) : null,
-    ma20Slope10dPct: Number.isFinite(ma20Ago10) ? pct(ma20, ma20Ago10) : null,
-    ma60Slope10dPct: Number.isFinite(ma60Ago10) ? pct(ma60, ma60Ago10) : null,
-    ma120Slope10dPct: Number.isFinite(ma120Ago10) ? pct(ma120, ma120Ago10) : null,
+    gapLastMa20Pct: Number.isFinite(gapLastMa20) ? round(gapLastMa20, 2) : null,
+    gapMa20Ma60Pct: Number.isFinite(gapMa20Ma60) ? round(gapMa20Ma60, 2) : null,
+    gapMa60Ma120Pct: Number.isFinite(gapMa60Ma120) ? round(gapMa60Ma120, 2) : null,
+    ma20Slope10dPct: Number.isFinite(slope20) ? round(slope20, 2) : null,
+    ma60Slope20dPct: Number.isFinite(slope60) ? round(slope60, 2) : null,
+    ma120Slope20dPct: Number.isFinite(slope120) ? round(slope120, 2) : null,
     return20d: Number.isFinite(ret20) ? round(ret20, 2) : null,
     return60d: Number.isFinite(ret60) ? round(ret60, 2) : null,
     return120d: Number.isFinite(ret120) ? round(ret120, 2) : null,
+    positiveDays20Pct: Number.isFinite(positive20) ? round(positive20 * 100, 1) : null,
+    positiveDays60Pct: Number.isFinite(positive60) ? round(positive60 * 100, 1) : null,
+    maxDrawdown60Pct: Number.isFinite(drawdown60) ? round(drawdown60, 2) : null,
+    rangePosition120Pct: Number.isFinite(range120) ? round(range120, 1) : null,
+    scoreBreakdown: {
+      structure: round(structureScore, 1),
+      slope: round(slopeScore, 1),
+      momentum: round(momentumScore, 1),
+      persistence: round(persistenceScore, 1),
+      riskQuality: round(qualityScore, 1),
+    },
     aligned: fullAligned,
     rising,
     wavePass: fullAligned && rising,
-    series: clean.slice(-140).map((r, idx, arr) => {
+    series: clean.slice(-160).map((r, idx, arr) => {
       const globalIdx = clean.length - arr.length + idx;
       const subset = closes.slice(0, globalIdx + 1);
       return {
@@ -753,8 +806,51 @@ function analyzeSectorTrend(rows) {
         ma120: subset.length >= 120 ? round(sma(subset, 120), 2) : null,
       };
     }),
-    rule: "현재 지수와 MA20·60·120 정배열, 각 이동평균선 기울기, 20·60일 수익률을 종합해 지속 상승 점수를 계산",
+    rule: "정배열 이격도 25 + 이동평균 기울기 25 + 20·60·120일 모멘텀 30 + 상승 지속성 10 + 낙폭/범위 위치 10을 실제 퍼센트 기반 연속점수로 계산",
   };
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, Number(value) || 0));
+}
+
+function smoothBandScore(value, low, high, weight) {
+  if (!Number.isFinite(value)) return weight * 0.42;
+  return clamp01((value - low) / (high - low)) * weight;
+}
+
+function positiveDayRatio(values) {
+  const nums = (values || []).map(Number).filter(Number.isFinite);
+  if (nums.length < 2) return null;
+  let positive = 0;
+  let total = 0;
+  for (let i = 1; i < nums.length; i++) {
+    if (nums[i] > nums[i - 1]) positive += 1;
+    total += 1;
+  }
+  return total ? positive / total : null;
+}
+
+function maxDrawdownPct(values) {
+  const nums = (values || []).map(Number).filter(Number.isFinite);
+  if (!nums.length) return null;
+  let peak = nums[0];
+  let worst = 0;
+  for (const value of nums) {
+    if (value > peak) peak = value;
+    if (peak > 0) worst = Math.min(worst, ((value - peak) / peak) * 100);
+  }
+  return worst;
+}
+
+function rangePositionPct(values) {
+  const nums = (values || []).map(Number).filter(Number.isFinite);
+  if (!nums.length) return null;
+  const low = Math.min(...nums);
+  const high = Math.max(...nums);
+  const last = nums.at(-1);
+  if (high === low) return 50;
+  return ((last - low) / (high - low)) * 100;
 }
 
 async function cacheJsonGet(url) {
@@ -1150,16 +1246,21 @@ function titleCaseAlias(text) {
 
 function selectSectorMembers(universe, sectorCode, sectorName, marketCode) {
   const target = normalizeIndustryCode(sectorCode);
-  const specialFlag = sectorSpecialFlag(sectorName);
   const matches = [];
+
   for (const item of universe || []) {
     if (marketCode === "K" && item.market !== "KOSPI") continue;
     if (marketCode === "Q" && item.market !== "KOSDAQ") continue;
     if (!isInvestmentCandidate(item)) continue;
-    const exact = [item.industryLarge, item.industryMedium, item.industrySmall].some((x) => normalizeIndustryCode(x) === target);
-    const special = specialFlag ? isYesFlag(item.flags?.[specialFlag]) : false;
-    if (exact || special) matches.push(item);
+
+    // 중요: STEP 1의 KIS 업종지수는 '지수업종 대분류'와 매칭해야 합니다.
+    // v0.5는 중분류/소분류 또는 KRX 테마 플래그까지 OR로 섞어서
+    // 건설업에 KCC·포스코퓨처엠 같은 종목이 끼는 문제가 있었습니다.
+    // v0.6부터는 선택한 공식 업종의 대분류 코드가 정확히 같은 종목만 보여줍니다.
+    const exactLarge = normalizeIndustryCode(item.industryLarge) === target;
+    if (exactLarge) matches.push({ ...item, sectorMatch: "industryLarge" });
   }
+
   const uniq = new Map();
   for (const m of matches) uniq.set(m.code, m);
   return [...uniq.values()];
@@ -1203,53 +1304,58 @@ function buildStockRankItem(code, annualRows, ratioRows, callResults = []) {
     debtRatio: numOrNull(r.lblt_rate),
     roe: numOrNull(r.roe_val),
   })).filter((r) => r.period).sort((a, b) => b.period.localeCompare(a.period));
+
   const latestRatio = ratios[0] || {};
   const chronological = [...annual].sort((a, b) => a.period.localeCompare(b.period));
-  const revenueTransitions = countPositiveTransitions(chronological.map((x) => x.revenue));
+  const revenues = chronological.map((x) => x.revenue);
+  const operating = chronological.map((x) => x.operatingIncome);
+  const revenueTransitions = countPositiveTransitions(revenues);
   const opPositiveYears = chronological.filter((x) => Number.isFinite(x.operatingIncome) && x.operatingIncome > 0).length;
-  const opTransitions = countPositiveTransitions(chronological.map((x) => x.operatingIncome));
+  const opTransitions = countPositiveTransitions(operating);
+  const revenueCagr = cagrPercent(revenues);
+  const opCagr = cagrPercent(operating);
 
-  let score = 0;
-  score += revenueTransitions * 15; // 최대 30
-  if (opPositiveYears === 3) score += 15;
-  else if (opPositiveYears === 2) score += 8;
-  if (opTransitions === 2) score += 5;
-  const debt = latestRatio.debtRatio;
-  if (Number.isFinite(debt)) {
-    if (debt < 100) score += 20;
-    else if (debt < 150) score += 15;
-    else if (debt < 200) score += 5;
-  }
-  const reserve = latestRatio.reserveRatio;
-  if (Number.isFinite(reserve)) {
-    if (reserve >= 1000) score += 10;
-    else if (reserve >= 500) score += 8;
-    else if (reserve >= 200) score += 5;
-    else if (reserve > 0) score += 2;
-  }
-  const roe = latestRatio.roe;
-  if (Number.isFinite(roe)) {
-    if (roe >= 15) score += 10;
-    else if (roe >= 10) score += 8;
-    else if (roe >= 5) score += 5;
-    else if (roe > 0) score += 2;
-  }
   const latestAnnual = annual[0] || {};
   const opMargin = Number.isFinite(latestAnnual.revenue) && Number.isFinite(latestAnnual.operatingIncome) && latestAnnual.revenue !== 0
     ? (latestAnnual.operatingIncome / latestAnnual.revenue) * 100
     : null;
-  if (Number.isFinite(opMargin)) {
-    if (opMargin >= 15) score += 10;
-    else if (opMargin >= 10) score += 8;
-    else if (opMargin >= 5) score += 5;
-    else if (opMargin > 0) score += 2;
+  const debt = latestRatio.debtRatio;
+  const reserve = latestRatio.reserveRatio;
+  const roe = latestRatio.roe;
+
+  // v0.6: 계단식 점수를 연속 점수로 바꿔 같은 70점이 반복되는 현상을 줄입니다.
+  // 실제 CAGR, 부채비율, 유보율, ROE, 영업이익률의 크기 차이를 그대로 점수 차이로 반영합니다.
+  let revenueScore = 0;
+  if (chronological.length >= 2) {
+    revenueScore += clamp01(revenueTransitions / Math.max(1, chronological.length - 1)) * 12;
+    revenueScore += smoothBandScore(revenueCagr, -8, 22, 18);
+  } else revenueScore = 6;
+
+  let operatingScore = 0;
+  if (chronological.length) {
+    operatingScore += clamp01(opPositiveYears / chronological.length) * 10;
+    operatingScore += clamp01(opTransitions / Math.max(1, chronological.length - 1)) * 4;
+    operatingScore += smoothBandScore(opCagr, -15, 35, 6);
   }
-  score = Math.min(100, score);
+
+  const debtScore = Number.isFinite(debt)
+    ? Math.max(0, Math.min(20, 20 * (1 - Math.max(0, debt - 20) / 230)))
+    : 7;
+  const reserveScore = Number.isFinite(reserve)
+    ? Math.max(0, Math.min(10, (Math.log10(Math.max(0, reserve) + 1) / Math.log10(3001)) * 10))
+    : 3;
+  const roeScore = Number.isFinite(roe) ? smoothBandScore(roe, -2, 22, 10) : 3;
+  const marginScore = Number.isFinite(opMargin) ? smoothBandScore(opMargin, -2, 22, 10) : 3;
+
+  const score = round(Math.max(0, Math.min(100,
+    revenueScore + operatingScore + debtScore + reserveScore + roeScore + marginScore
+  )), 1);
 
   let grade = "C";
-  if (score >= 85) grade = "S";
-  else if (score >= 70) grade = "A";
-  else if (score >= 55) grade = "B";
+  if (score >= 88) grade = "S";
+  else if (score >= 80) grade = "A+";
+  else if (score >= 72) grade = "A";
+  else if (score >= 62) grade = "B";
 
   return {
     code,
@@ -1257,15 +1363,35 @@ function buildStockRankItem(code, annualRows, ratioRows, callResults = []) {
     grade,
     revenueGrowing3y: chronological.length >= 3 && revenueTransitions === 2,
     revenueTransitions,
+    revenueCagr: Number.isFinite(revenueCagr) ? round(revenueCagr, 2) : null,
     operatingProfitPositive3y: chronological.length >= 3 && opPositiveYears === 3,
+    operatingCagr: Number.isFinite(opCagr) ? round(opCagr, 2) : null,
     annual,
     debtRatio: Number.isFinite(debt) ? debt : null,
     reserveRatio: Number.isFinite(reserve) ? reserve : null,
     roe: Number.isFinite(roe) ? roe : null,
     operatingMargin: Number.isFinite(opMargin) ? round(opMargin, 2) : null,
+    scoreBreakdown: {
+      revenue: round(revenueScore, 1),
+      operating: round(operatingScore, 1),
+      debt: round(debtScore, 1),
+      reserve: round(reserveScore, 1),
+      roe: round(roeScore, 1),
+      margin: round(marginScore, 1),
+    },
     errors: callResults.filter((x) => !x.ok).map((x) => `${x.label}: ${x.error}`),
-    scoreRule: "3개년 매출 우상향 30 + 영업이익 안정성 20 + 부채비율 20 + 유보율 10 + ROE 10 + 영업이익률 10 (최대 100, 일부 지표 미제공 시 감점)",
+    scoreRule: "매출 30(CAGR+연속성) + 영업이익 20(흑자+증가+CAGR) + 부채비율 20 + 유보율 10 + ROE 10 + 영업이익률 10을 연속점수로 계산",
   };
+}
+
+function cagrPercent(values) {
+  const nums = (values || []).map(Number);
+  if (nums.length < 2) return null;
+  const first = nums[0];
+  const last = nums.at(-1);
+  const periods = nums.length - 1;
+  if (!Number.isFinite(first) || !Number.isFinite(last) || first <= 0 || last <= 0 || periods <= 0) return null;
+  return (Math.pow(last / first, 1 / periods) - 1) * 100;
 }
 
 function countPositiveTransitions(values) {

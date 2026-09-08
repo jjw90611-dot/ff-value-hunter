@@ -408,3 +408,22 @@ footer p { margin: 0; font-size: 9px; }
   canvas.chart { height: 260px; }
 }
 .company-name > span { display:block; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#718198; font-size:9px; }
+
+
+/* v0.6 · 변별력 강화 */
+.sector-score-row em {
+  display:inline-flex; align-items:center; justify-content:center; margin-left:4px;
+  min-width:30px; height:22px; padding:0 7px; border-radius:999px;
+  background:#eef4ff; color:#235493; font-size:10px; font-weight:950; font-style:normal;
+}
+.sector-card.strong .sector-score-row em { background:#e6f8f0; color:#087c54; }
+.sector-card.watch .sector-score-row em { background:#fff4dc; color:#9a6405; }
+.trend-breakdown {
+  grid-column:1 / -1; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:8px;
+  padding:10px; border:1px solid var(--line); border-radius:12px; background:#f8fafc;
+}
+.trend-breakdown span { display:flex; flex-direction:column; gap:3px; color:var(--muted); font-size:10px; font-weight:800; }
+.trend-breakdown b { color:var(--ink); font-size:13px; }
+@media (max-width:760px) {
+  .trend-breakdown { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}

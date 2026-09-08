@@ -72,7 +72,7 @@ function drawCards() {
 drawCards();
 
 // -----------------------------
-// v0.5 산업 → 기업 발굴 흐름
+// v0.6 산업 → 기업 발굴 흐름
 // -----------------------------
 const sectorGrid = $("sectorGrid");
 const sectorEmpty = $("sectorEmpty");
@@ -356,8 +356,8 @@ async function scanAllSectorTrends() {
   sectorState.scanning = false;
   $("scanSectors").disabled = false;
   $("loadSectors").disabled = false;
-  const strong = sectors.filter((s) => (sectorState.trends.get(s.id)?.score || 0) >= 70).length;
-  setSectorProgress(`분석 완료 · ${success}개 성공${failed ? ` · ${failed}개 오류` : ""} · 상승추세 70점 이상 ${strong}개. 높은 점수부터 정렬했습니다.`, true);
+  const strong = sectors.filter((s) => (sectorState.trends.get(s.id)?.score || 0) >= 74).length;
+  setSectorProgress(`분석 완료 · ${success}개 성공${failed ? ` · ${failed}개 오류` : ""} · A등급(74점) 이상 ${strong}개. 실제 기울기·수익률을 반영한 소수점 점수로 정렬했습니다.`, true);
   renderSectorCards();
   updateSectorStats("분석 완료");
 }
@@ -366,7 +366,7 @@ async function scanAllSectorTrends() {
 function updateSectorStats(statusLabel = null) {
   const total = sectorState.sectors.length;
   const trends = [...sectorState.trends.values()].filter(Boolean);
-  const rising = trends.filter((t) => t?.ok && Number(t.score) >= 70).length;
+  const rising = trends.filter((t) => t?.ok && Number(t.score) >= 74).length;
   const aligned = trends.filter((t) => t?.ok && t.wavePass === true).length;
   if ($("sectorTotalStat")) $("sectorTotalStat").textContent = total ? fmt(total) : "-";
   if ($("sectorRisingStat")) $("sectorRisingStat").textContent = trends.length ? fmt(rising) : "-";
@@ -385,7 +385,7 @@ function renderSectorCards() {
   } else if (sectorState.filter === "rising" && scannedAny) {
     items = items.filter((s) => {
       const t = sectorState.trends.get(s.id);
-      return !t || (t.ok && (t.score >= 55 || t.return60d > 0));
+      return !t || (t.ok && (t.score >= 58 || t.return60d > 0));
     });
   }
 
@@ -403,11 +403,12 @@ function renderSectorCards() {
 }
 
 function sectorCardHtml(sector, trend) {
-  const score = trend?.ok ? trend.score : null;
-  const scoreClass = score >= 85 ? "strong" : score >= 70 ? "good" : score >= 55 ? "watch" : "neutral-card";
+  const score = trend?.ok ? Number(trend.score) : null;
+  const scoreClass = score >= 90 ? "strong" : score >= 74 ? "good" : score >= 58 ? "watch" : "neutral-card";
   const dayClass = signClass(sector.dayPct);
   const trendLabel = trend?.label || "장기추세 미분석";
   const wave = trend?.wavePass ? "정배열 ✓" : trend?.ok ? "정배열 미충족" : "분석 전";
+  const grade = trend?.grade || "-";
   return `
     <button class="sector-card ${scoreClass}" data-sector-id="${escapeHtml(sector.id)}">
       <div class="sector-card-top">
@@ -415,12 +416,13 @@ function sectorCardHtml(sector, trend) {
         <span class="day-change ${dayClass}">${signedPctPlain(sector.dayPct)}</span>
       </div>
       <h3>${escapeHtml(sector.name)}</h3>
-      <div class="sector-score-row"><b>${score === null ? "--" : score}</b><span>/100 지속상승</span></div>
+      <div class="sector-score-row"><b>${score === null ? "--" : score.toFixed(1)}</b><span>/100</span><em>${escapeHtml(grade)}</em></div>
       <div class="sector-label">${escapeHtml(trendLabel)}</div>
       <div class="sector-mini">
         <span>${wave}</span>
         <span>20일 ${trend?.return20d == null ? "-" : signedPctPlain(trend.return20d)}</span>
         <span>60일 ${trend?.return60d == null ? "-" : signedPctPlain(trend.return60d)}</span>
+        ${trend?.positiveDays60Pct == null ? "" : `<span>60일 상승일 ${fmt1(trend.positiveDays60Pct)}%</span>`}
       </div>
     </button>`;
 }
@@ -429,6 +431,7 @@ async function openSector(sector) {
   sectorState.selected = sector;
   sectorState.members = [];
   sectorState.rankings.clear();
+  if ($("memberSearch")) $("memberSearch").value = ""; // 이전 섹터 검색어가 남아 새 섹터 종목을 숨기는 문제 방지
   sectorDetail.classList.remove("hidden");
   $("sectorTitle").textContent = `${sector.name} · ${sector.market}`;
   $("sectorSubtitle").textContent = "관련기업과 재무 우량순위를 불러오는 중입니다.";
@@ -454,9 +457,13 @@ async function openSector(sector) {
     const q = new URLSearchParams({ code: sector.code, name: sector.name, market: sector.marketCode });
     const data = await api(`/api/sector-members?${q}`);
     sectorState.members = data.members || [];
-    $("sectorSubtitle").textContent = `${data.total || sectorState.members.length}개 관련기업 · 한국투자 공식 종목 마스터 기준`;
-    $("memberCount").textContent = `관련기업 ${fmt(data.total || sectorState.members.length)}개`;
+    const count = Number(data.total || sectorState.members.length || 0);
+    $("sectorSubtitle").textContent = `${count}개 관련기업 · KIS 지수업종 대분류 코드 정확일치 기준`;
+    $("memberCount").textContent = `관련기업 ${fmt(count)}개`;
     renderMembers();
+    if (!count) {
+      memberGrid.innerHTML = `<div class="empty-state"><div class="empty-icon">!</div><b>업종코드에 정확히 일치하는 기업을 찾지 못했습니다.</b><span>${escapeHtml(sector.name)}(${escapeHtml(sector.code)}) · 잘못된 관련주를 억지로 섞지 않도록 v0.6에서는 대분류 코드가 같은 종목만 표시합니다.</span></div>`;
+    }
   } catch (error) {
     memberGrid.innerHTML = `<div class="empty-state"><div class="empty-icon">!</div><b>관련기업 조회에 실패했습니다.</b><span>${escapeHtml(error.message)}</span></div>`;
     $("sectorSubtitle").textContent = "관련기업 조회에 실패했습니다.";
@@ -470,12 +477,20 @@ function renderSectorTrendSummary(sector, trend) {
     box.innerHTML = `<div class="note warning-note">장기 추세 데이터를 충분히 불러오지 못했습니다. ${escapeHtml(trend?.error || "")}</div>`;
     return;
   }
+  const bd = trend.scoreBreakdown || {};
   box.innerHTML = `
-    <div class="trend-metric"><span>지속상승 점수</span><b class="${trend.score >= 70 ? "good" : trend.score >= 55 ? "warn" : "neutral"}">${fmt(trend.score)}/100</b><small>${escapeHtml(trend.label)}</small></div>
+    <div class="trend-metric"><span>지속상승 점수</span><b class="${trend.score >= 74 ? "good" : trend.score >= 58 ? "warn" : "neutral"}">${fmt1(trend.score)}/100</b><small>${escapeHtml(trend.grade || "-")} · ${escapeHtml(trend.label)}</small></div>
     <div class="trend-metric"><span>정배열</span><b class="${trend.wavePass ? "good" : "warn"}">${trend.wavePass ? "통과" : "관찰"}</b><small>현재가 &gt; MA20 &gt; MA60 &gt; MA120</small></div>
     <div class="trend-metric"><span>20일</span><b class="${signClass(trend.return20d)}">${signedPctPlain(trend.return20d)}</b><small>단기 산업 파도</small></div>
     <div class="trend-metric"><span>60일</span><b class="${signClass(trend.return60d)}">${signedPctPlain(trend.return60d)}</b><small>중기 산업 파도</small></div>
-    <div class="trend-metric"><span>120일</span><b class="${signClass(trend.return120d)}">${signedPctPlain(trend.return120d)}</b><small>장기 변화</small></div>`;
+    <div class="trend-metric"><span>120일</span><b class="${signClass(trend.return120d)}">${signedPctPlain(trend.return120d)}</b><small>장기 변화</small></div>
+    <div class="trend-breakdown">
+      <span>정배열·이격 <b>${fmt1(bd.structure)}/25</b></span>
+      <span>이평선 기울기 <b>${fmt1(bd.slope)}/25</b></span>
+      <span>20·60·120일 모멘텀 <b>${fmt1(bd.momentum)}/30</b></span>
+      <span>상승 지속성 <b>${fmt1(bd.persistence)}/10</b></span>
+      <span>낙폭·위치 <b>${fmt1(bd.riskQuality)}/10</b></span>
+    </div>`;
   if ($("sectorChartAcc")?.open) requestAnimationFrame(() => drawSectorChart($("sectorChart"), trend.series || []));
 }
 
@@ -508,8 +523,8 @@ function memberCardHtml(m, displayRank) {
   const r = m.rank;
   const annual = r?.annual || [];
   const latest = annual[0] || {};
-  const gradeClass = r?.grade === "S" || r?.grade === "A" ? "good" : r?.grade === "B" ? "warn" : "neutral";
-  const revenueText = !r ? "분석 전" : r.revenueGrowing3y ? "3년 연속 상승" : annual.length >= 2 ? `${r.revenueTransitions || 0}/2 구간 상승` : "자료 부족";
+  const gradeClass = r?.grade === "S" || String(r?.grade || "").startsWith("A") ? "good" : r?.grade === "B" ? "warn" : "neutral";
+  const revenueText = !r ? "분석 전" : r.revenueGrowing3y ? `3년 연속 상승 · CAGR ${fmt1(r.revenueCagr)}%` : annual.length >= 2 ? `${r.revenueTransitions || 0}/2 구간 상승 · CAGR ${fmt1(r.revenueCagr)}%` : "자료 부족";
   const opText = !r ? (isFiniteValue(m.operatingIncome) ? shortNumber(m.operatingIncome) : "-") : r.operatingProfitPositive3y ? "3년 연속 흑자" : isFiniteValue(latest.operatingIncome) ? shortNumber(latest.operatingIncome) : "확인 필요";
   const cap = isFiniteValue(m.marketCap) ? `${fmt(m.marketCap)}억` : "-";
   const qualityHit = r?.revenueGrowing3y && Number(r.debtRatio) < 150;
@@ -519,7 +534,7 @@ function memberCardHtml(m, displayRank) {
       <div class="company-card-top">
         <span class="rank-no">${displayRank}</span>
         <div class="company-name"><b>${escapeHtml(m.name)}</b>${english}<small>${escapeHtml(m.code)} · ${escapeHtml(m.market)} · 시총 ${cap}</small></div>
-        <div class="grade-box">${r ? `<span class="grade-badge ${gradeClass}">${escapeHtml(r.grade)}</span><span class="grade-score">${fmt(r.score)}</span>` : `<span class="analysis-wait">분석 전</span>`}</div>
+        <div class="grade-box">${r ? `<span class="grade-badge ${gradeClass}">${escapeHtml(r.grade)}</span><span class="grade-score">${fmt1(r.score)}</span>` : `<span class="analysis-wait">분석 전</span>`}</div>
       </div>
       <div class="company-metrics">
         <div class="company-metric"><small>3년 매출</small><b class="${r?.revenueGrowing3y ? "pos" : "neutral"}">${escapeHtml(revenueText)}</b></div>
@@ -527,7 +542,7 @@ function memberCardHtml(m, displayRank) {
         <div class="company-metric"><small>유보율</small><b>${r ? fmtPct(r.reserveRatio) : "-"}</b></div>
         <div class="company-metric"><small>ROE</small><b class="${signClass(r?.roe)}">${r ? fmtPct(r.roe) : (isFiniteValue(m.roe) ? fmtPct(m.roe) : "-")}</b></div>
         <div class="company-metric"><small>영업이익</small><b class="${r?.operatingProfitPositive3y ? "pos" : "neutral"}">${escapeHtml(opText)}</b></div>
-        <div class="company-metric"><small>FF 기업질</small><b>${r ? `${escapeHtml(r.grade)} · ${fmt(r.score)}점` : "분석 필요"}</b></div>
+        <div class="company-metric"><small>FF 기업질</small><b>${r ? `${escapeHtml(r.grade)} · ${fmt1(r.score)}점` : "분석 필요"}</b></div>
       </div>
       <div class="company-actions">
         <a class="mini-link npay" href="${npayUrl(m.code)}" target="_blank" rel="noopener noreferrer">Npay 차트 ↗</a>
@@ -593,12 +608,24 @@ function updateNpayTopLink(code) {
   const link = $("npayTopLink");
   if (!link) return;
   const valid = /^\d{6}$/.test(code || "");
-  link.href = valid ? npayUrl(code) : "https://m.stock.naver.com/";
+  link.href = valid ? npayUrl(code) : npayHomeUrl();
   link.classList.toggle("disabled-link", !valid);
 }
 
+function isMobileNpay() {
+  const ua = navigator.userAgent || "";
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || window.matchMedia("(max-width: 760px)").matches;
+}
+
+function npayHomeUrl() {
+  return isMobileNpay() ? "https://m.stock.naver.com/" : "https://stock.naver.com/";
+}
+
 function npayUrl(code) {
-  return `https://m.stock.naver.com/domestic/stock/${encodeURIComponent(code)}/total`;
+  const safeCode = encodeURIComponent(code);
+  return isMobileNpay()
+    ? `https://m.stock.naver.com/domestic/stock/${safeCode}/total`
+    : `https://stock.naver.com/domestic/stock/${safeCode}/price`;
 }
 
 function sleep(ms) {
@@ -1255,6 +1282,10 @@ function formatDateTime(value) {
 
 function fmt(v) {
   return isFiniteValue(v) ? Number(v).toLocaleString("ko-KR", { maximumFractionDigits: 0 }) : "-";
+}
+
+function fmt1(v) {
+  return isFiniteValue(v) ? Number(v).toLocaleString("ko-KR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : "-";
 }
 
 function fmt2(v) {
