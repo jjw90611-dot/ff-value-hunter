@@ -17,7 +17,7 @@
         <span class="pill">자동주문 없음</span>
         <span class="pill">호가창 없음</span>
         <span class="pill">외국인·기관 지속매집 가점</span>
-        <span class="pill">v0.2</span>
+        <span class="pill">v0.3</span>
       </div>
     </header>
 
@@ -66,28 +66,28 @@
           <input id="stockCode" value="005930" maxlength="6" inputmode="numeric" />
         </label>
         <label>
-          <span>DART 기업고유번호 <em>선택</em></span>
-          <input id="corpCode" value="00126380" maxlength="8" inputmode="numeric" />
+          <span>DART 기업고유번호 <em>선택 · 비워도 분석 가능</em></span>
+          <input id="corpCode" value="" maxlength="8" inputmode="numeric" placeholder="예: 00126380" />
         </label>
         <button id="analyze" class="primary analyze-btn">분석 실행</button>
       </div>
 
-      <div id="loading" class="loading hidden">주가·수급·재무 데이터를 함께 불러오는 중입니다. 수 초 걸릴 수 있습니다.</div>
+      <div id="loading" class="loading hidden">KIS 호출 제한을 피하기 위해 기업정보·시세·수급·재무·차트를 순서대로 불러오는 중입니다. 약 5~10초 걸릴 수 있습니다.</div>
       <div id="result" class="result hidden"></div>
     </section>
 
     <section class="panel roadmap">
-      <h2>이번 버전에서 추가된 것</h2>
+      <h2>v0.3 보완사항</h2>
       <div class="road-grid">
-        <div><b>Cloudflare 변수 보완</b><span>keep_vars + 현재 배포본 바인딩 진단</span></div>
-        <div><b>종목 차트</b><span>일봉 + MA20/60/120</span></div>
-        <div><b>수급 상세</b><span>외국인·기관 일별/누적 매집 확인</span></div>
-        <div><b>재무 추세</b><span>최근 3개년 + 최근 4개 분기</span></div>
-        <div><b>안정성</b><span>유보율·부채비율·ROE</span></div>
+        <div><b>KIS 호출 제한 대응</b><span>토큰 재사용 + API 순차 호출 + 초당 제한 재시도</span></div>
+        <div><b>기업명·업종</b><span>KIS 주식기본조회로 기업/시장/섹터 표시</span></div>
+        <div><b>OpenDART 안전처리</b><span>무한 리디렉션 차단 + API 키 화면 노출 방지</span></div>
+        <div><b>연간 실적 정리</b><span>결산월 기준 최근 3개 연도만 분리</span></div>
+        <div><b>상세 탭</b><span>차트·수급·분기·재무비율은 닫힌 상태에서 선택 열람</span></div>
       </div>
     </section>
 
-    <footer>FF Value Hunter v0.2 · 기업 선별을 돕는 가치투자 분석 도구</footer>
+    <footer>FF Value Hunter v0.3 · 기업 선별을 돕는 가치투자 분석 도구 · 자동주문 없음</footer>
   </main>
   <script src="/app.js" type="module"></script>
 </body>

@@ -7,9 +7,9 @@ const result = $("result");
 const loading = $("loading");
 
 const providers = [
-  { id: "dart", name: "OpenDART", endpoint: "/api/test/dart", detail: "공시·기업정보" },
-  { id: "kis", name: "한국투자 KIS", endpoint: "/api/test/kis", detail: "주가·수급·차트·재무" },
-  { id: "krx", name: "KRX", endpoint: "/api/test/krx", detail: "공식 시장 데이터" },
+  { id: "dart", name: "OpenDART", endpoint: "/api/test/dart", detail: "공시·기업정보 (선택 기능)" },
+  { id: "kis", name: "한국투자 KIS", endpoint: "/api/test/kis", detail: "핵심: 주가·수급·차트·재무·기업정보" },
+  { id: "krx", name: "KRX", endpoint: "/api/test/krx", detail: "공식 시장 데이터 (승인 후 사용)" },
   { id: "ecos", name: "한국은행 ECOS", endpoint: "/api/test/ecos", detail: "금리·환율·거시" },
 ];
 
@@ -64,7 +64,7 @@ function setCard(id, state, text) {
   if (!card) return;
   const status = card.querySelector(".status");
   const detail = card.querySelector(".detail");
-  const labels = { ok: "정상", bad: "오류", wait: "점검중", idle: "대기" };
+  const labels = { ok: "정상", bad: "오류", warn: "확인필요", wait: "점검중", idle: "대기" };
   status.textContent = labels[state] || state;
   status.className = `status ${state === "idle" ? "" : state}`.trim();
   detail.textContent = text;
@@ -125,8 +125,12 @@ $("testAll").addEventListener("click", async () => {
     setCard(p.id, "wait", "실제 API 응답을 확인하는 중...");
     try {
       const data = await api(p.endpoint);
+      if (data.available === false) {
+        setCard(p.id, "warn", data.message || "현재 선택 기능은 사용할 수 없습니다.");
+        continue;
+      }
       if (p.id === "dart") setCard(p.id, "ok", `${data.sample?.corpName || "기업조회 성공"} · 인증 정상`);
-      if (p.id === "kis") setCard(p.id, "ok", `${fmt(data.sample?.price)}원 · 시세조회 정상`);
+      if (p.id === "kis") setCard(p.id, "ok", `${fmt(data.sample?.price)}원 · 핵심 시세조회 정상`);
       if (p.id === "krx") setCard(p.id, "ok", `${formatDate(data.date)} · ${fmt(data.rows)}개 행 수신`);
       if (p.id === "ecos") setCard(p.id, "ok", `${fmt(data.rows)}개 주요지표 수신 · 인증 정상`);
     } catch (e) {
@@ -166,6 +170,7 @@ function renderResult(d) {
   const s = d.supply || {};
   const f = d.finance || {};
   const snap = d.snapshot || {};
+  const identity = d.identity || {};
   const latestRatio = f.latestRatio || {};
   const latestAnnual = f.annual?.[0] || {};
   const supplyClass = (s.score || 0) >= 80 ? "good" : (s.score || 0) >= 50 ? "warn" : "bad";
@@ -175,14 +180,22 @@ function renderResult(d) {
     : "neutral";
   const zoneText = zoneLabel(t.zone);
   const opMargin = margin(latestAnnual.operatingIncome, latestAnnual.revenue);
-  const dartName = d.dart?.company?.corpName || null;
   const sourceErrors = Array.isArray(d.sourceErrors) ? d.sourceErrors : [];
+  const companyName = identity.name || snap.name || d.code;
+  const sectorText = identity.sector || snap.industry || identity.industryStandard || "업종정보 확인 중";
 
   result.innerHTML = `
-    <div class="result-title">
+    <div class="result-title company-title">
       <div>
-        <h3>${escapeHtml(snap.name || d.code)}</h3>
-        <div class="sub">${escapeHtml(snap.industry || "업종정보 없음")} · ${escapeHtml(d.code)}${dartName ? ` · ${escapeHtml(dartName)}` : ""}</div>
+        <div class="company-name-row">
+          <h3>${escapeHtml(companyName)}</h3>
+          <span class="code-badge">${escapeHtml(d.code)}</span>
+        </div>
+        <div class="identity-badges">
+          ${identity.market ? `<span class="identity-badge market-badge">${escapeHtml(identity.market)}</span>` : ""}
+          ${sectorText ? `<span class="identity-badge">${escapeHtml(sectorText)}</span>` : ""}
+          ${identity.industryStandard && identity.industryStandard !== sectorText ? `<span class="identity-badge subtle">${escapeHtml(identity.industryStandard)}</span>` : ""}
+        </div>
       </div>
       <div class="sub">분석시각 ${formatDateTime(d.analyzedAt)}</div>
     </div>
@@ -237,7 +250,7 @@ function renderResult(d) {
       </div>
 
       <div class="metric">
-        <h3>안정성</h3>
+        <h3>안정성 <span class="metric-period">${periodLabel(latestRatio.period)}</span></h3>
         <div class="big ${debtClass}">${fmtPct(latestRatio.debtRatio)}</div>
         <div class="kv">
           <span>부채비율</span><span>${fmtPct(latestRatio.debtRatio)}</span>
@@ -260,10 +273,11 @@ function renderResult(d) {
     </div>
 
     <div class="note">
-      아래 상세항목은 기본적으로 닫혀 있습니다. 필요한 항목만 눌러 펼쳐보세요. 재무 금액은 KIS 손익계산서 API가 반환한 원자료 수치를 그대로 표시하며, 분기 손익은 누적값을 개별 분기로 환산했습니다.
+      아래 상세항목은 기본적으로 닫혀 있습니다. 필요한 항목만 눌러 펼쳐보세요. 재무 금액은 KIS 손익계산서 원자료를 표시하고, 분기 누적 여부가 확인되는 경우에만 개별 분기로 환산합니다.
     </div>
 
     <div class="accordions">
+      ${companyAccordion(identity, snap)}
       ${priceAccordion(t)}
       ${supplyAccordion(s)}
       ${annualAccordion(f.annual || [])}
@@ -275,6 +289,28 @@ function renderResult(d) {
 
   result.classList.remove("hidden");
   bindAccordions(d);
+}
+
+function companyAccordion(identity, snap) {
+  const sector = identity.sector || snap.industry || "-";
+  return `
+    <details class="accordion" id="acc-company">
+      <summary><span>기업 · 시장 · 업종 정보</span><span class="accordion-meta">어디 회사인지 먼저 확인</span></summary>
+      <div class="accordion-body">
+        <div class="kv wide-kv">
+          <span>기업명</span><span>${escapeHtml(identity.name || snap.name || "-")}</span>
+          <span>종목코드</span><span>${escapeHtml(identity.code || "-")}</span>
+          <span>시장</span><span>${escapeHtml(identity.market || "-")}</span>
+          <span>대표 업종/섹터</span><span>${escapeHtml(sector)}</span>
+          <span>업종 대분류</span><span>${escapeHtml(identity.industryLarge || "-")}</span>
+          <span>업종 중분류</span><span>${escapeHtml(identity.industryMedium || "-")}</span>
+          <span>업종 소분류</span><span>${escapeHtml(identity.industrySmall || "-")}</span>
+          <span>표준산업분류</span><span>${escapeHtml(identity.industryStandard || "-")}</span>
+          <span>결산월</span><span>${escapeHtml(identity.fiscalMonth ? `${identity.fiscalMonth}월` : "-")}</span>
+          <span>상장일</span><span>${escapeHtml(formatDate(identity.listedDate))}</span>
+        </div>
+      </div>
+    </details>`;
 }
 
 function priceAccordion(t) {
@@ -383,7 +419,7 @@ function ratioAccordion(rows, latest) {
   const debtOk = Number.isFinite(Number(latest?.debtRatio)) && Number(latest.debtRatio) < 150;
   return `
     <details class="accordion" id="acc-ratio">
-      <summary><span>안정성 · 유보율 · 부채비율</span><span class="accordion-meta">FF 재무 필터</span></summary>
+      <summary><span>안정성 · 유보율 · 부채비율</span><span class="accordion-meta">최근 공시 + 연간 추세</span></summary>
       <div class="accordion-body">
         <div class="ratio-grid">
           <div class="ratio-card">

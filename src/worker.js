@@ -2,7 +2,9 @@ const KIS_BASE = "https://openapi.koreainvestment.com:9443";
 const DART_BASE = "https://opendart.fss.or.kr/api";
 const KRX_BASE = "https://data-dbg.krx.co.kr/svc/apis";
 const ECOS_BASE = "https://ecos.bok.or.kr/api";
-const APP_VERSION = "0.2.0";
+const APP_VERSION = "0.3.0";
+const KIS_MIN_INTERVAL_MS = 450;
+const KIS_TOKEN_CACHE_URL = "https://ff-value-hunter-token-cache.local/kis-access-token-v3";
 
 const REQUIRED_BINDINGS = [
   "APP_ACCESS_KEY",
@@ -15,6 +17,8 @@ const REQUIRED_BINDINGS = [
 
 let kisTokenCache = null;
 let kisTokenPromise = null;
+let kisRequestChain = Promise.resolve();
+let kisLastRequestAt = 0;
 
 export default {
   async fetch(request, env) {
@@ -60,14 +64,25 @@ export default {
 
       if (url.pathname === "/api/test/dart") {
         requireEnv(env, ["DART_API_KEY"]);
-        const data = await dartCompany(env, url.searchParams.get("corp") || "00126380");
-        return json({
-          ok: data.status === "000",
-          provider: "OpenDART",
-          sample: slimDartCompany(data),
-          rawStatus: data.status,
-          message: data.message,
-        });
+        try {
+          const data = await dartCompany(env, url.searchParams.get("corp") || "00126380");
+          return json({
+            ok: true,
+            available: data.status === "000",
+            provider: "OpenDART",
+            sample: slimDartCompany(data),
+            rawStatus: data.status,
+            message: data.message || (data.status === "000" ? "인증 정상" : "DART 응답 확인 필요"),
+          });
+        } catch (error) {
+          return json({
+            ok: true,
+            available: false,
+            provider: "OpenDART",
+            state: "dart-unavailable",
+            message: dartFriendlyError(error),
+          });
+        }
       }
 
       if (url.pathname === "/api/test/kis") {
@@ -86,14 +101,29 @@ export default {
       if (url.pathname === "/api/test/krx") {
         requireEnv(env, ["KRX_AUTH_KEY"]);
         const basDd = url.searchParams.get("date") || lastWeekdayYYYYMMDD();
-        const data = await krxKospiDaily(env, basDd);
-        return json({
-          ok: Array.isArray(data.OutBlock_1),
-          provider: "KRX",
-          date: basDd,
-          rows: data.OutBlock_1?.length || 0,
-          sample: data.OutBlock_1?.[0] || null,
-        });
+        try {
+          const data = await krxKospiDaily(env, basDd);
+          return json({
+            ok: true,
+            available: Array.isArray(data.OutBlock_1),
+            provider: "KRX",
+            date: basDd,
+            rows: data.OutBlock_1?.length || 0,
+            sample: data.OutBlock_1?.[0] || null,
+          });
+        } catch (error) {
+          const msg = safeErrorMessage(error);
+          if (/401|Unauthorized API Call/i.test(msg)) {
+            return json({
+              ok: true,
+              available: false,
+              provider: "KRX",
+              state: "approval-required",
+              message: "인증키는 감지됐지만 ‘유가증권 일별매매정보’ API 활용승인이 없거나 아직 반영되지 않았습니다. KRX는 현재 단일 종목 분석에는 필수가 아닙니다.",
+            });
+          }
+          return json({ ok: true, available: false, provider: "KRX", state: "unavailable", message: msg });
+        }
       }
 
       if (url.pathname === "/api/test/ecos") {
@@ -108,42 +138,50 @@ export default {
         const code = normalizeCode(url.searchParams.get("code") || "005930");
         const corp = (url.searchParams.get("corp") || "").trim();
 
-        const calls = await Promise.all([
-          safeSource("일봉 차트", () => kisDailyChart(env, code, 190)),
-          safeSource("외국인·기관 수급", () => kisInvestor(env, code)),
-          safeSource("외국인 보유비율", () => kisDailyPrice30(env, code)),
-          safeSource("현재가", () => kisCurrentPrice(env, code)),
-          safeSource("연간 손익계산서", () => kisIncomeStatement(env, code, "0")),
-          safeSource("분기 손익계산서", () => kisIncomeStatement(env, code, "1")),
-          safeSource("재무비율", () => kisFinancialRatio(env, code, "0")),
-        ]);
-
-        const [chartRes, investorRes, dailyRes, priceRes, annualRes, quarterRes, ratioRes] = calls;
+        // KIS는 호출 제한이 있으므로 v0.3부터 병렬 호출을 금지하고 순차 호출합니다.
+        const stockInfoRes = await safeSource("기업명·업종", () => kisSearchStockInfo(env, code));
+        const priceRes = await safeSource("현재가", () => kisCurrentPrice(env, code));
         if (!priceRes.ok) {
           throw new Error(`KIS 현재가 조회 실패: ${priceRes.error}`);
         }
+        const investorRes = await safeSource("외국인·기관 수급", () => kisInvestor(env, code));
+        const dailyRes = await safeSource("외국인 보유비율", () => kisDailyPrice30(env, code));
+        const annualRes = await safeSource("연간 손익계산서", () => kisIncomeStatement(env, code, "0"));
+        const quarterRes = await safeSource("분기 손익계산서", () => kisIncomeStatement(env, code, "1"));
+        const ratioRes = await safeSource("재무비율", () => kisFinancialRatio(env, code, "0"));
+        const chartRes = await safeSource("일봉 차트", () => kisDailyChart(env, code, 140));
 
+        const calls = [stockInfoRes, priceRes, investorRes, dailyRes, annualRes, quarterRes, ratioRes, chartRes];
         const sourceErrors = calls
           .filter((item) => !item.ok)
           .map((item) => ({ label: item.label, error: item.error }));
 
-        const chartRaw = chartRes.value || [];
+        const stockInfoRaw = stockInfoRes.value || {};
+        const priceRaw = priceRes.value || {};
         const investorRaw = investorRes.value || {};
         const dailyRaw = dailyRes.value || {};
-        const priceRaw = priceRes.value || {};
         const annualIncomeRaw = annualRes.value || {};
         const quarterIncomeRaw = quarterRes.value || {};
         const ratioRaw = ratioRes.value || {};
+        const chartRaw = chartRes.value || [];
 
+        const identity = buildIdentity(stockInfoRaw.output || {}, priceRaw.output || {}, code);
         const snapshot = slimCurrentPrice(priceRaw.output || {});
+        if (!snapshot.name) snapshot.name = identity.name;
+        if (!snapshot.industry) snapshot.industry = identity.sector || identity.industryStandard;
         const technical = analyzeTechnical(chartRaw);
         const supply = analyzeSupply(investorRaw.output || [], dailyRaw.output || []);
-        const finance = buildFinance(annualIncomeRaw.output || [], quarterIncomeRaw.output || [], ratioRaw.output || []);
+        const finance = buildFinance(
+          annualIncomeRaw.output || [],
+          quarterIncomeRaw.output || [],
+          ratioRaw.output || [],
+          identity.fiscalMonth || snapshot.fiscalMonth || "12"
+        );
 
         let dart = null;
         if (corp) {
           if (!hasBinding(env, "DART_API_KEY")) {
-            dart = { ok: false, error: "DART_API_KEY is not configured" };
+            dart = { ok: false, error: "DART_API_KEY가 설정되지 않았습니다." };
           } else if (!/^\d{8}$/.test(corp)) {
             dart = { ok: false, error: "DART 기업고유번호는 8자리 숫자여야 합니다." };
           } else {
@@ -155,7 +193,7 @@ export default {
                 message: company.message || null,
               };
             } catch (error) {
-              dart = { ok: false, error: error?.message || String(error) };
+              dart = { ok: false, error: dartFriendlyError(error) };
             }
           }
         }
@@ -165,6 +203,7 @@ export default {
           version: APP_VERSION,
           code,
           analyzedAt: new Date().toISOString(),
+          identity,
           snapshot,
           technical,
           supply,
@@ -185,7 +224,7 @@ export default {
 
       return json({ ok: false, error: "Not found" }, 404);
     } catch (error) {
-      return json({ ok: false, error: error?.message || String(error) }, error?.status || 500);
+      return json({ ok: false, error: safeErrorMessage(error) }, error?.status || 500);
     }
   },
 };
@@ -194,7 +233,7 @@ async function safeSource(label, fn) {
   try {
     return { ok: true, label, value: await fn(), error: null };
   } catch (error) {
-    return { ok: false, label, value: null, error: error?.message || String(error) };
+    return { ok: false, label, value: null, error: safeErrorMessage(error) };
   }
 }
 
@@ -253,45 +292,94 @@ function normalizeCode(value) {
 }
 
 async function fetchJson(url, options = {}, label = "API") {
-  const res = await fetch(url, options);
+  let res;
+  try {
+    res = await fetch(url, options);
+  } catch (error) {
+    throw new Error(`${label} 네트워크 오류: ${safeErrorMessage(error)}`);
+  }
   const text = await res.text();
   let data;
   try {
     data = JSON.parse(text);
   } catch {
-    throw new Error(`${label}가 JSON이 아닌 응답을 반환했습니다 (HTTP ${res.status}): ${text.slice(0, 220)}`);
+    throw new Error(`${label}가 JSON이 아닌 응답을 반환했습니다 (HTTP ${res.status}): ${sanitizeText(text.slice(0, 220))}`);
   }
   if (!res.ok) {
-    throw new Error(`${label} HTTP ${res.status}: ${data?.msg1 || data?.message || JSON.stringify(data).slice(0, 220)}`);
+    throw new Error(`${label} HTTP ${res.status}: ${sanitizeText(data?.msg1 || data?.error_description || data?.message || JSON.stringify(data).slice(0, 220))}`);
   }
   return data;
 }
 
+async function readPersistedKisToken() {
+  try {
+    if (typeof caches === "undefined" || !caches.default) return null;
+    const cached = await caches.default.match(new Request(KIS_TOKEN_CACHE_URL));
+    if (!cached) return null;
+    const data = await cached.json();
+    if (!data?.token || !Number.isFinite(Number(data?.expiresAt))) return null;
+    if (Number(data.expiresAt) <= Date.now() + 120_000) return null;
+    return { token: data.token, expiresAt: Number(data.expiresAt) };
+  } catch {
+    return null;
+  }
+}
+
+async function persistKisToken(token, expiresAt) {
+  try {
+    if (typeof caches === "undefined" || !caches.default) return;
+    const ttl = Math.max(60, Math.floor((expiresAt - Date.now()) / 1000));
+    const response = new Response(JSON.stringify({ token, expiresAt }), {
+      headers: {
+        "content-type": "application/json",
+        "cache-control": `public, max-age=${ttl}`,
+      },
+    });
+    await caches.default.put(new Request(KIS_TOKEN_CACHE_URL), response);
+  } catch {
+    // Cache API를 사용할 수 없는 환경에서는 모듈 메모리 캐시만 사용합니다.
+  }
+}
+
 async function kisToken(env) {
   const now = Date.now();
-  if (kisTokenCache && kisTokenCache.expiresAt > now + 60_000) return kisTokenCache.token;
+  if (kisTokenCache && kisTokenCache.expiresAt > now + 120_000) return kisTokenCache.token;
   if (kisTokenPromise) return kisTokenPromise;
 
   kisTokenPromise = (async () => {
-    const data = await fetchJson(`${KIS_BASE}/oauth2/tokenP`, {
-      method: "POST",
-      headers: { "content-type": "application/json; charset=utf-8" },
-      body: JSON.stringify({
-        grant_type: "client_credentials",
-        appkey: bindingValue(env, "KIS_APP_KEY"),
-        appsecret: bindingValue(env, "KIS_APP_SECRET"),
-      }),
-    }, "KIS OAuth");
-
-    if (!data.access_token) {
-      throw new Error(`KIS 토큰 발급 실패: ${data.error_description || data.msg1 || "access_token 없음"}`);
+    const persisted = await readPersistedKisToken();
+    if (persisted) {
+      kisTokenCache = persisted;
+      return persisted.token;
     }
 
-    const expiresIn = Number(data.expires_in || 21_600);
-    kisTokenCache = {
-      token: data.access_token,
-      expiresAt: Date.now() + Math.max(300, expiresIn - 120) * 1000,
-    };
+    let data;
+    try {
+      data = await fetchJson(`${KIS_BASE}/oauth2/tokenP`, {
+        method: "POST",
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body: JSON.stringify({
+          grant_type: "client_credentials",
+          appkey: bindingValue(env, "KIS_APP_KEY"),
+          appsecret: bindingValue(env, "KIS_APP_SECRET"),
+        }),
+      }, "KIS OAuth");
+    } catch (error) {
+      const msg = safeErrorMessage(error);
+      if (/EGW00133|1분당 1회|접근토큰 발급 잠시 후/i.test(msg)) {
+        throw new Error("KIS 접근토큰 발급은 1분당 1회 제한이 있습니다. v0.3은 발급 토큰을 재사용하도록 보완했습니다. 직전에 토큰을 발급했다면 약 60초 후 한 번만 다시 시도하세요.");
+      }
+      throw error;
+    }
+
+    if (!data.access_token) {
+      throw new Error(`KIS 토큰 발급 실패: ${sanitizeText(data.error_description || data.msg1 || "access_token 없음")}`);
+    }
+
+    const expiresIn = Number(data.expires_in || 82_800); // 공식 샘플은 접근토큰 유효기간을 1일로 관리
+    const expiresAt = Date.now() + Math.max(600, Math.min(expiresIn - 180, 82_800)) * 1000;
+    kisTokenCache = { token: data.access_token, expiresAt };
+    await persistKisToken(data.access_token, expiresAt);
     return data.access_token;
   })();
 
@@ -302,25 +390,63 @@ async function kisToken(env) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function kisSchedule(task) {
+  const run = kisRequestChain.then(async () => {
+    const wait = Math.max(0, KIS_MIN_INTERVAL_MS - (Date.now() - kisLastRequestAt));
+    if (wait) await sleep(wait);
+    kisLastRequestAt = Date.now();
+    return task();
+  });
+  kisRequestChain = run.catch(() => null);
+  return run;
+}
+
+function isKisRateLimitMessage(message) {
+  return /초당 거래건수를 초과|EGW00201|rate.?limit/i.test(String(message || ""));
+}
+
 async function kisGet(env, path, trId, params) {
   const token = await kisToken(env);
   const qs = new URLSearchParams(params);
   const url = `${KIS_BASE}${path}?${qs.toString()}`;
-  const data = await fetchJson(url, {
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      authorization: `Bearer ${token}`,
-      appkey: bindingValue(env, "KIS_APP_KEY"),
-      appsecret: bindingValue(env, "KIS_APP_SECRET"),
-      tr_id: trId,
-      custtype: "P",
-    },
-  }, `KIS ${path}`);
 
-  if (data.rt_cd && data.rt_cd !== "0") {
-    throw new Error(`KIS 오류 ${data.msg_cd || data.rt_cd}: ${data.msg1 || "unknown error"}`);
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const data = await kisSchedule(() => fetchJson(url, {
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          accept: "application/json,text/plain,*/*",
+          authorization: `Bearer ${token}`,
+          appkey: bindingValue(env, "KIS_APP_KEY"),
+          appsecret: bindingValue(env, "KIS_APP_SECRET"),
+          tr_id: trId,
+          custtype: "P",
+        },
+      }, `KIS ${path}`));
+
+      if (data.rt_cd && data.rt_cd !== "0") {
+        throw new Error(`KIS 오류 ${data.msg_cd || data.rt_cd}: ${sanitizeText(data.msg1 || "unknown error")}`);
+      }
+      return data;
+    } catch (error) {
+      lastError = error;
+      if (!isKisRateLimitMessage(safeErrorMessage(error)) || attempt >= 2) break;
+      await sleep(1100 * (attempt + 1));
+    }
   }
-  return data;
+  throw lastError;
+}
+
+async function kisSearchStockInfo(env, code) {
+  return kisGet(env, "/uapi/domestic-stock/v1/quotations/search-stock-info", "CTPF1002R", {
+    PRDT_TYPE_CD: "300",
+    PDNO: code,
+  });
 }
 
 async function kisCurrentPrice(env, code) {
@@ -366,7 +492,7 @@ async function kisDailyChart(env, code, targetRows = 190) {
   const collected = new Map();
   let end = new Date();
 
-  for (let page = 0; page < 4 && collected.size < targetRows; page++) {
+  for (let page = 0; page < 2 && collected.size < targetRows; page++) {
     const start = new Date(end);
     start.setUTCDate(start.getUTCDate() - 220);
 
@@ -403,7 +529,37 @@ async function dartCompany(env, corpCode) {
     throw error;
   }
   const qs = new URLSearchParams({ crtfc_key: bindingValue(env, "DART_API_KEY"), corp_code: corpCode });
-  return fetchJson(`${DART_BASE}/company.json?${qs}`, {}, "OpenDART company");
+  const url = `${DART_BASE}/company.json?${qs}`;
+  let res;
+  try {
+    res = await fetch(url, {
+      redirect: "manual",
+      headers: {
+        accept: "application/json,text/plain,*/*",
+        "user-agent": "FF-Value-Hunter/0.3 (Cloudflare Worker)",
+      },
+    });
+  } catch (error) {
+    throw new Error(`OpenDART 네트워크 오류: ${safeErrorMessage(error)}`);
+  }
+
+  if ([301, 302, 303, 307, 308].includes(res.status)) {
+    const location = res.headers.get("location") || "";
+    if (/error1\.html/i.test(location)) {
+      throw new Error("OpenDART가 Cloudflare Worker 요청을 오류 페이지로 리디렉션했습니다. v0.3에서는 이 오류가 반복되지 않도록 리디렉션을 중단하고, 기업명·업종은 KIS로 대체합니다.");
+    }
+    throw new Error(`OpenDART가 예상치 못한 리디렉션을 반환했습니다 (HTTP ${res.status}).`);
+  }
+
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`OpenDART가 JSON이 아닌 응답을 반환했습니다 (HTTP ${res.status}).`);
+  }
+  if (!res.ok) throw new Error(`OpenDART HTTP ${res.status}: ${sanitizeText(data?.message || "요청 실패")}`);
+  return data;
 }
 
 async function krxKospiDaily(env, basDd) {
@@ -579,21 +735,23 @@ function analyzeSupply(investorRows, dailyRows) {
   };
 }
 
-function buildFinance(annualRows, quarterRows, ratioRows) {
-  const annual = normalizeIncomeRows(annualRows)
-    .sort((a, b) => b.period.localeCompare(a.period))
-    .slice(0, 3);
+function buildFinance(annualRows, quarterRows, ratioRows, fiscalMonth = "12") {
+  const fm = normalizeFiscalMonth(fiscalMonth) || "12";
+  const annualAll = normalizeIncomeRows(annualRows).sort((a, b) => b.period.localeCompare(a.period));
+  const annualFiltered = annualAll.filter((r) => r.period.endsWith(fm));
+  const annual = (annualFiltered.length ? annualFiltered : annualAll).slice(0, 3);
 
-  const quarterCum = normalizeIncomeRows(quarterRows)
-    .sort((a, b) => a.period.localeCompare(b.period));
-  const annualAll = normalizeIncomeRows(annualRows)
-    .sort((a, b) => a.period.localeCompare(b.period));
-
-  const quarterStandalone = toStandaloneQuarters(quarterCum, annualAll)
+  const quarterAllAsc = normalizeIncomeRows(quarterRows).sort((a, b) => a.period.localeCompare(b.period));
+  const annualAsc = normalizeIncomeRows(annualRows).sort((a, b) => a.period.localeCompare(b.period));
+  const cumulativeDetected = detectCumulativeQuarterRows(quarterAllAsc, annualAsc);
+  const quarterRowsNormalized = cumulativeDetected
+    ? toStandaloneQuarters(quarterAllAsc, annualAsc)
+    : quarterAllAsc.map((r) => ({ ...r, label: quarterLabel(r.period), convertedFromCumulative: false }));
+  const quarterly = quarterRowsNormalized
     .sort((a, b) => b.period.localeCompare(a.period))
     .slice(0, 4);
 
-  const ratios = (ratioRows || [])
+  const ratioAll = (ratioRows || [])
     .map((r) => ({
       period: normalizePeriod(r.stac_yymm),
       reserveRatio: numOrNull(r.rsrv_rate),
@@ -608,14 +766,47 @@ function buildFinance(annualRows, quarterRows, ratioRows) {
     .filter((r) => r.period)
     .sort((a, b) => b.period.localeCompare(a.period));
 
+  const annualRatios = ratioAll.filter((r) => r.period.endsWith(fm));
+
   return {
     annual,
-    quarterly: quarterStandalone,
-    ratios: ratios.slice(0, 3),
-    latestRatio: ratios[0] || null,
+    quarterly,
+    ratios: (annualRatios.length ? annualRatios : ratioAll).slice(0, 3),
+    latestRatio: ratioAll[0] || null,
+    fiscalMonth: fm,
     amountUnit: "KIS 손익계산서 원자료 단위",
-    note: "KIS 분기 손익은 연간 누적값으로 제공되므로 동일 연도 누적값의 차이를 계산해 개별 분기로 변환했습니다. 4분기는 연간값과 3분기 누적값 차이로 계산합니다.",
+    note: cumulativeDetected
+      ? "KIS 분기 조회값이 연간값과 일치하는 누적형으로 확인되어 Q2-Q1, Q3-Q2, 연간-Q3 방식으로 개별 분기를 환산했습니다."
+      : "KIS 분기 조회값을 최근 4개 분기 원자료 기준으로 표시합니다. 누적형 여부가 검증되지 않은 종목은 임의 차감하지 않습니다.",
   };
+}
+
+function detectCumulativeQuarterRows(quarterRows, annualRows) {
+  const annualMap = new Map((annualRows || []).filter((r) => r.period?.endsWith("12")).map((r) => [r.period, r]));
+  for (const q of quarterRows || []) {
+    if (!q.period?.endsWith("12")) continue;
+    const a = annualMap.get(q.period);
+    if (!a || !Number.isFinite(q.revenue) || !Number.isFinite(a.revenue) || a.revenue === 0) continue;
+    const diff = Math.abs(q.revenue - a.revenue) / Math.abs(a.revenue);
+    if (diff <= 0.02) return true;
+  }
+  return false;
+}
+
+function quarterLabel(period) {
+  const s = String(period || "");
+  if (!/^\d{6}$/.test(s)) return s || "-";
+  const month = Number(s.slice(4, 6));
+  const q = Math.max(1, Math.min(4, Math.ceil(month / 3)));
+  return `${s.slice(0, 4)} Q${q}`;
+}
+
+function normalizeFiscalMonth(value) {
+  const s = String(value || "").replace(/[^0-9]/g, "");
+  if (/^\d{2}$/.test(s)) return s;
+  if (/^\d{4}$/.test(s)) return s.slice(0, 2);
+  if (/^\d{6}$/.test(s)) return s.slice(4, 6);
+  return null;
 }
 
 function normalizeIncomeRows(rows) {
@@ -679,6 +870,7 @@ function slimCurrentPrice(o = {}) {
   return {
     name: o.hts_kor_isnm || null,
     industry: o.bstp_kor_isnm || null,
+    fiscalMonth: normalizeFiscalMonth(o.stac_month),
     price: numOrNull(o.stck_prpr),
     marketCap100MKRW: numOrNull(o.hts_avls),
     per: numOrNull(o.per),
@@ -694,6 +886,43 @@ function slimCurrentPrice(o = {}) {
   };
 }
 
+function buildIdentity(rawOutput, priceOutput, code) {
+  const o = Array.isArray(rawOutput) ? (rawOutput[0] || {}) : (rawOutput || {});
+  const p = priceOutput || {};
+  const market = inferMarket(o);
+  const sectorCandidates = [
+    o.idx_bztp_scls_cd_name,
+    o.idx_bztp_mcls_cd_name,
+    o.idx_bztp_lcls_cd_name,
+    p.bstp_kor_isnm,
+  ].filter(Boolean);
+  return {
+    code,
+    name: o.prdt_name || o.prdt_abrv_name || p.hts_kor_isnm || null,
+    englishName: o.prdt_eng_name || o.prdt_eng_abrv_name || null,
+    market,
+    sector: sectorCandidates[0] || null,
+    industryLarge: o.idx_bztp_lcls_cd_name || null,
+    industryMedium: o.idx_bztp_mcls_cd_name || null,
+    industrySmall: o.idx_bztp_scls_cd_name || null,
+    industryStandard: o.std_idst_clsf_cd_name || null,
+    fiscalMonth: normalizeFiscalMonth(o.setl_mmdd) || normalizeFiscalMonth(p.stac_month),
+    settlementDate: o.setl_mmdd || null,
+    listedDate: market === "KOSDAQ" ? (o.kosdaq_mket_lstg_dt || null) : (o.scts_mket_lstg_dt || null),
+    kospi200: o.kospi200_item_yn || null,
+    managementItem: o.admn_item_yn || null,
+    tradingStopped: o.tr_stop_yn || null,
+  };
+}
+
+function inferMarket(o = {}) {
+  const id = String(o.mket_id_cd || "").toUpperCase();
+  if (id.includes("KSQ") || id.includes("KQ") || (o.kosdaq_mket_lstg_dt && !o.kosdaq_mket_lstg_abol_dt)) return "KOSDAQ";
+  if (id.includes("KNX") || id.includes("KONEX")) return "KONEX";
+  if (id.includes("STK") || id.includes("KOSPI") || (o.scts_mket_lstg_dt && !o.scts_mket_lstg_abol_dt)) return "KOSPI";
+  return id || null;
+}
+
 function slimDartCompany(d = {}) {
   return {
     corpCode: d.corp_code || null,
@@ -704,6 +933,26 @@ function slimDartCompany(d = {}) {
     industryCode: d.induty_code || null,
     fiscalMonth: d.acc_mt || null,
   };
+}
+
+function sanitizeText(value) {
+  let text = String(value ?? "");
+  text = text.replace(/([?&](?:crtfc_key|appkey|appsecret|auth_key|key)=)[^&\s,]*/gi, "$1[REDACTED]");
+  text = text.replace(/\b[a-f0-9]{40}\b/gi, "[REDACTED_KEY]");
+  text = text.replace(/(Bearer\s+)[A-Za-z0-9._~+\/-]+/gi, "$1[REDACTED]");
+  return text;
+}
+
+function safeErrorMessage(error) {
+  return sanitizeText(error?.message || String(error || "알 수 없는 오류"));
+}
+
+function dartFriendlyError(error) {
+  const msg = safeErrorMessage(error);
+  if (/error1\.html|리디렉션|redirect/i.test(msg)) {
+    return "OpenDART가 Cloudflare Worker 요청을 오류 페이지로 보내고 있습니다. 기업명·업종은 KIS로 정상 표시되며, DART 공시 기능만 보류됩니다. OpenDART 키의 허용환경/IP 상태도 확인해주세요.";
+  }
+  return msg;
 }
 
 function sma(values, n) {

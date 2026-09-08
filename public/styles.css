@@ -41,6 +41,7 @@ input:focus { border-color: #6b91ca; box-shadow: 0 0 0 3px rgba(33,86,165,.09); 
 .status.ok { background: #e8f7f0; color: var(--good); }
 .status.bad { background: #fff0ee; color: var(--bad); }
 .status.wait { background: #fff8e8; color: var(--warn); }
+.status.warn { background: #fff8e8; color: var(--warn); }
 .card .detail { color: var(--muted); font-size: 13px; line-height: 1.5; word-break: break-word; }
 .deploy-notice { margin-top: 16px; padding: 14px 16px; border-radius: 12px; background: #fff0ee; color: #8f1d14; border: 1px solid #f4c7c2; font-size: 13px; line-height: 1.6; }
 .diagnostic { margin-top: 14px; border: 1px solid var(--line); border-radius: 12px; background: #fbfcfe; }
@@ -132,3 +133,12 @@ code { background: #f2f4f7; padding: 2px 5px; border-radius: 5px; }
 @media (max-width: 640px) {
   .compact-ratios { grid-template-columns: repeat(2, 1fr); }
 }
+
+.company-name-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.company-name-row h3 { font-size:28px; }
+.code-badge { display:inline-flex; align-items:center; padding:5px 9px; border-radius:999px; background:#eef2f7; color:#475467; font-size:12px; font-weight:900; letter-spacing:.04em; }
+.identity-badges { display:flex; gap:7px; flex-wrap:wrap; margin-top:8px; }
+.identity-badge { display:inline-flex; align-items:center; padding:6px 9px; border-radius:999px; background:#edf4ff; border:1px solid #d7e5fa; color:#244d86; font-size:12px; font-weight:800; }
+.identity-badge.market-badge { background:#e9f7f0; border-color:#ccebdd; color:#16794f; }
+.identity-badge.subtle { background:#f8fafc; border-color:#e4e9f1; color:#667085; }
+.metric-period { float:right; color:var(--muted); font-size:11px; font-weight:700; margin-top:2px; }
