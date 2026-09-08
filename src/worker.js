@@ -2,10 +2,10 @@ const KIS_BASE = "https://openapi.koreainvestment.com:9443";
 const DART_BASE = "https://opendart.fss.or.kr/api";
 const KRX_BASE = "https://data-dbg.krx.co.kr/svc/apis";
 const ECOS_BASE = "https://ecos.bok.or.kr/api";
-const APP_VERSION = "0.4.0";
+const APP_VERSION = "0.5.0";
 const MASTER_BASE = "https://new.real.download.dws.co.kr/common/master";
-const UNIVERSE_CACHE_URL = "https://ff-value-hunter-cache.local/stock-universe-v4";
-const SECTOR_TREND_CACHE_PREFIX = "https://ff-value-hunter-cache.local/sector-trend-v4/";
+const UNIVERSE_CACHE_URL = "https://ff-value-hunter-cache.local/stock-universe-v5";
+const SECTOR_TREND_CACHE_PREFIX = "https://ff-value-hunter-cache.local/sector-trend-v5/";
 const KIS_MIN_INTERVAL_MS = 450;
 const KIS_TOKEN_CACHE_URL = "https://ff-value-hunter-token-cache.local/kis-access-token-v3";
 
@@ -155,6 +155,16 @@ export default {
         });
       }
 
+      if (url.pathname === "/api/search-stocks") {
+        requireEnv(env, ["KIS_APP_KEY", "KIS_APP_SECRET"]);
+        const q = String(url.searchParams.get("q") || "").trim();
+        const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 10), 1), 20);
+        if (!q) return json({ ok: true, items: [] });
+        const universe = await loadStockUniverse();
+        const items = searchStocks(universe, q, limit);
+        return json({ ok: true, query: q, items, version: APP_VERSION });
+      }
+
       if (url.pathname === "/api/sector-trend") {
         requireEnv(env, ["KIS_APP_KEY", "KIS_APP_SECRET"]);
         const code = normalizeSectorCode(url.searchParams.get("code"));
@@ -176,6 +186,7 @@ export default {
         const market = String(url.searchParams.get("market") || "ALL").toUpperCase();
         const universe = await loadStockUniverse();
         const members = selectSectorMembers(universe, code, name, market)
+          .map(decorateMasterStock)
           .sort((a, b) => (b.marketCap || 0) - (a.marketCap || 0));
         return json({
           ok: true,
@@ -957,6 +968,184 @@ function masterNumber(value, decimal = false) {
 
 function isYesFlag(value) {
   return ["Y", "1", "A"].includes(String(value || "").trim().toUpperCase());
+}
+
+function searchStocks(universe, query, limit = 10) {
+  const q = String(query || "").trim();
+  const qNorm = normalizeSearchText(q);
+  if (!qNorm) return [];
+
+  const rows = [];
+  for (const item of universe || []) {
+    if (!isInvestmentCandidate(item)) continue;
+    const nameNorm = normalizeSearchText(item.name);
+    const alias = englishNameFor(item.code, item.name);
+    const aliasNorm = normalizeSearchText(alias);
+    const marketNorm = normalizeSearchText(item.market);
+    const code = String(item.code || "");
+    let score = 0;
+
+    if (code === qNorm) score = 1000;
+    else if (code.startsWith(qNorm)) score = 920;
+    else if (nameNorm === qNorm) score = 880;
+    else if (nameNorm.startsWith(qNorm)) score = 810;
+    else if (aliasNorm === qNorm) score = 780;
+    else if (aliasNorm.startsWith(qNorm)) score = 740;
+    else if (nameNorm.includes(qNorm)) score = 700;
+    else if (aliasNorm.includes(qNorm)) score = 640;
+    else if (`${nameNorm}${marketNorm}`.includes(qNorm)) score = 560;
+
+    if (!score) continue;
+    score += Math.min(Number(item.marketCap) || 0, 999999999) / 100000000;
+    rows.push({
+      score,
+      item: {
+        code: item.code,
+        name: item.name,
+        market: item.market,
+        englishName: alias || "",
+        nameEn: alias || "",
+        searchHint: [item.industryLarge, item.industryMedium].filter(Boolean).join(" · ") || item.market,
+        marketCap: item.marketCap,
+      },
+    });
+  }
+
+  rows.sort((a, b) => b.score - a.score || (Number(b.item.marketCap) || 0) - (Number(a.item.marketCap) || 0) || String(a.item.name).localeCompare(String(b.item.name), "ko"));
+  const unique = new Map();
+  for (const row of rows) {
+    if (!unique.has(row.item.code)) unique.set(row.item.code, row.item);
+    if (unique.size >= limit) break;
+  }
+  return [...unique.values()];
+}
+
+function normalizeSearchText(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9가-힣]+/g, "");
+}
+
+const ENGLISH_NAME_BY_CODE = Object.freeze({
+  "005930": "Samsung Electronics",
+  "000660": "SK hynix",
+  "035420": "NAVER",
+  "035720": "Kakao",
+  "005380": "Hyundai Motor Company",
+  "000270": "Kia",
+  "012330": "Hyundai Mobis",
+  "051910": "LG Chem",
+  "373220": "LG Energy Solution",
+  "006400": "Samsung SDI",
+  "066570": "LG Electronics",
+  "009150": "Samsung Electro-Mechanics",
+  "207940": "Samsung Biologics",
+  "068270": "Celltrion",
+  "005490": "POSCO Holdings",
+  "003670": "POSCO Future M",
+  "028260": "Samsung C&T",
+  "034730": "SK Inc.",
+  "096770": "SK Innovation",
+  "017670": "SK Telecom",
+  "030200": "KT",
+  "105560": "KB Financial Group",
+  "055550": "Shinhan Financial Group",
+  "086790": "Hana Financial Group",
+  "316140": "Woori Financial Group",
+  "012450": "Hanwha Aerospace",
+  "272210": "Hanwha Systems",
+  "042660": "Hanwha Ocean",
+  "064350": "Hyundai Rotem",
+  "047810": "Korea Aerospace Industries",
+  "034020": "Doosan Enerbility",
+  "454910": "Doosan Robotics",
+  "009540": "HD Korea Shipbuilding & Offshore Engineering",
+  "329180": "HD Hyundai Heavy Industries",
+  "010620": "HD Hyundai Mipo",
+  "010140": "Samsung Heavy Industries",
+  "267260": "HD Hyundai Electric",
+  "298040": "Hyosung Heavy Industries",
+  "010120": "LS ELECTRIC",
+  "042700": "Hanmi Semiconductor",
+  "240810": "Wonik IPS",
+  "036930": "Jusung Engineering",
+  "007660": "ISU Petasys",
+  "247540": "EcoPro BM",
+  "086520": "EcoPro",
+  "196170": "ALTEOGEN",
+  "352820": "HYBE",
+  "041510": "SM Entertainment",
+  "035900": "JYP Entertainment",
+  "122870": "YG Entertainment",
+  "259960": "KRAFTON",
+  "293490": "Kakao Games",
+  "263750": "Pearl Abyss"
+});
+
+function englishNameFor(code, name) {
+  return ENGLISH_NAME_BY_CODE[String(code || "")] || companyAliasText(name) || "";
+}
+
+function decorateMasterStock(item = {}) {
+  const englishName = englishNameFor(item.code, item.name);
+  return { ...item, englishName, nameEn: englishName };
+}
+
+function companyAliasText(name) {
+  let out = ` ${String(name || "").toLowerCase()} `;
+  const map = [
+    [/삼성/g, " samsung "],
+    [/현대/g, " hyundai "],
+    [/기아/g, " kia "],
+    [/엘지|lg/g, " lg "],
+    [/에스케이|SK|sk/g, " sk "],
+    [/포스코/g, " posco "],
+    [/롯데/g, " lotte "],
+    [/한화/g, " hanwha "],
+    [/두산/g, " doosan "],
+    [/효성/g, " hyosung "],
+    [/카카오/g, " kakao "],
+    [/네이버/g, " naver "],
+    [/셀트리온/g, " celltrion "],
+    [/신한/g, " shinhan "],
+    [/하나/g, " hana "],
+    [/우리/g, " woori "],
+    [/국민|kb/g, " kb "],
+    [/전자/g, " electronics "],
+    [/전기/g, " electric "],
+    [/전지/g, " battery "],
+    [/반도체/g, " semiconductor "],
+    [/화학/g, " chemical "],
+    [/금융/g, " financial "],
+    [/은행/g, " bank "],
+    [/증권/g, " securities "],
+    [/생명/g, " life "],
+    [/보험/g, " insurance "],
+    [/중공업/g, " heavy industries "],
+    [/중공/g, " heavy industry "],
+    [/물산/g, " c&t trading "],
+    [/건설/g, " construction "],
+    [/에너지/g, " energy "],
+    [/조선/g, " shipbuilding "],
+    [/자동차/g, " motor "],
+    [/제약/g, " pharma "],
+    [/바이오/g, " bio "],
+    [/통신/g, " telecom "],
+    [/항공/g, " air "],
+    [/홀딩스|지주/g, " holdings "],
+  ];
+  for (const [rx, repl] of map) out = out.replace(rx, repl);
+  out = out.replace(/\s+/g, " ").trim();
+  return out && out !== String(name || "").toLowerCase().trim() ? titleCaseAlias(out) : "";
+}
+
+function titleCaseAlias(text) {
+  return String(text || "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => /^[a-z]/.test(part) ? part[0].toUpperCase() + part.slice(1) : part)
+    .join(" ");
 }
 
 function selectSectorMembers(universe, sectorCode, sectorName, marketCode) {

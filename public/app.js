@@ -5,6 +5,16 @@ const apiCards = $("apiCards");
 const deployNotice = $("deployNotice");
 const result = $("result");
 const loading = $("loading");
+const stockCodeInput = $("stockCode");
+const corpCodeInput = $("corpCode");
+const stockSearchInput = $("stockSearch");
+const stockSuggestions = $("stockSuggestions");
+const selectedStockBar = $("selectedStockBar");
+const selectedStockLogo = $("selectedStockLogo");
+const selectedStockName = $("selectedStockName");
+const selectedStockEnglish = $("selectedStockEnglish");
+const selectedStockCodeView = $("selectedStockCode");
+const selectedStockMarket = $("selectedStockMarket");
 
 const providers = [
   { id: "dart", name: "OpenDART", endpoint: "/api/test/dart", detail: "공시·기업정보 (선택 기능)" },
@@ -15,6 +25,7 @@ const providers = [
 
 let lastAnalysis = null;
 let resizeTimer = null;
+const stockSearchState = { items: [], activeIndex: -1, timer: null, lastQuery: "" };
 
 accessKey.value = sessionStorage.getItem("ff_access_key") || "";
 
@@ -61,13 +72,13 @@ function drawCards() {
 drawCards();
 
 // -----------------------------
-// v0.4 산업 → 기업 발굴 흐름
+// v0.5 산업 → 기업 발굴 흐름
 // -----------------------------
 const sectorGrid = $("sectorGrid");
 const sectorEmpty = $("sectorEmpty");
 const sectorProgress = $("sectorProgress");
 const sectorDetail = $("sectorDetail");
-const memberTableBody = $("memberTableBody");
+const memberGrid = $("memberGrid");
 const rankProgress = $("rankProgress");
 
 const sectorState = {
@@ -101,15 +112,20 @@ sectorGrid?.addEventListener("click", (event) => {
   if (sector) openSector(sector);
 });
 
-memberTableBody?.addEventListener("click", (event) => {
+memberGrid?.addEventListener("click", (event) => {
   const detailButton = event.target.closest("[data-stock-detail]");
   if (!detailButton) return;
   const code = detailButton.dataset.stockDetail;
   if (!/^\d{6}$/.test(code || "")) return;
-  $("stockCode").value = code;
-  updateNpayTopLink(code);
-  $("analyze").click();
+  const stock = sectorState.members.find((item) => item.code === code) || {
+    code,
+    name: detailButton.dataset.stockName || code,
+    market: detailButton.dataset.stockMarket || "",
+    englishName: detailButton.dataset.stockEnglish || "",
+  };
+  setSelectedStock(stock);
   document.querySelector(".stock-detail-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  setTimeout(() => $("analyze")?.click(), 280);
 });
 
 $("sectorChartAcc")?.addEventListener("toggle", () => {
@@ -118,10 +134,169 @@ $("sectorChartAcc")?.addEventListener("toggle", () => {
   requestAnimationFrame(() => drawSectorChart($("sectorChart"), trend?.series || []));
 });
 
-$("stockCode")?.addEventListener("input", () => updateNpayTopLink($("stockCode").value.trim()));
-updateNpayTopLink($("stockCode")?.value || "005930");
+initializeStockSearch();
+updateNpayTopLink("");
+
+function initializeStockSearch() {
+  if (!stockSearchInput || !stockSuggestions) return;
+
+  stockSearchInput.addEventListener("input", () => {
+    const current = (stockSearchInput.value || "").trim();
+    if (stockCodeInput.value && current !== (selectedStockName?.textContent || "").trim()) clearSelectedStockSelection();
+    scheduleStockSearch(current);
+  });
+  stockSearchInput.addEventListener("focus", () => {
+    if ((stockSearchInput.value || "").trim()) scheduleStockSearch(stockSearchInput.value);
+  });
+  stockSearchInput.addEventListener("keydown", handleStockSearchKeydown);
+
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".stock-search-wrap")) hideStockSuggestions();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    const hotkey = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k";
+    if (!hotkey) return;
+    event.preventDefault();
+    stockSearchInput.focus();
+    stockSearchInput.select();
+  });
+}
+
+function clearSelectedStockSelection() {
+  stockCodeInput.value = "";
+  selectedStockBar?.classList.add("hidden");
+  $("analyze").disabled = true;
+  updateNpayTopLink("");
+}
+
+function setSelectedStock(item = {}) {
+  const code = String(item.code || "").trim();
+  if (!/^\d{6}$/.test(code)) return;
+  const name = String(item.name || code).trim() || code;
+  const englishName = String(item.englishName || item.nameEn || "").trim();
+  const market = String(item.market || "").trim();
+
+  stockCodeInput.value = code;
+  stockSearchInput.value = name;
+  selectedStockBar?.classList.remove("hidden");
+  if (selectedStockName) selectedStockName.textContent = name;
+  if (selectedStockEnglish) {
+    selectedStockEnglish.textContent = englishName;
+    selectedStockEnglish.classList.toggle("hidden", !englishName);
+  }
+  if (selectedStockCodeView) selectedStockCodeView.textContent = code;
+  if (selectedStockMarket) selectedStockMarket.textContent = market || "국내주식";
+  if (selectedStockLogo) selectedStockLogo.textContent = stockInitials(name);
+  $("analyze").disabled = false;
+  updateNpayTopLink(code);
+  hideStockSuggestions();
+}
+
+function stockInitials(name) {
+  const text = String(name || "ST").trim();
+  const latin = text.match(/[A-Za-z]/g);
+  if (latin?.length >= 2) return `${latin[0]}${latin[1]}`.toUpperCase();
+  return text.replace(/[^가-힣A-Za-z0-9]/g, "").slice(0, 2) || "ST";
+}
+
+function scheduleStockSearch(query) {
+  const q = String(query || "").trim();
+  clearTimeout(stockSearchState.timer);
+  if (!q) {
+    stockSearchState.items = [];
+    stockSearchState.activeIndex = -1;
+    hideStockSuggestions();
+    return;
+  }
+  stockSearchState.timer = setTimeout(() => performStockSearch(q), 180);
+}
+
+async function performStockSearch(query) {
+  const q = String(query || "").trim();
+  if (!q) return hideStockSuggestions();
+  stockSearchState.lastQuery = q;
+  stockSuggestions.classList.remove("hidden");
+  stockSuggestions.innerHTML = `<div class="suggestion-state">기업을 찾는 중입니다…</div>`;
+
+  try {
+    const data = await api(`/api/search-stocks?q=${encodeURIComponent(q)}&limit=12`);
+    if (stockSearchState.lastQuery !== q) return;
+    stockSearchState.items = Array.isArray(data.items) ? data.items : [];
+    stockSearchState.activeIndex = stockSearchState.items.length ? 0 : -1;
+    renderStockSearchSuggestions();
+  } catch (error) {
+    if (stockSearchState.lastQuery !== q) return;
+    stockSearchState.items = [];
+    stockSearchState.activeIndex = -1;
+    stockSuggestions.classList.remove("hidden");
+    stockSuggestions.innerHTML = `<div class="suggestion-state">검색 중 오류가 발생했습니다.<br>${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderStockSearchSuggestions() {
+  if (!stockSuggestions) return;
+  const items = stockSearchState.items || [];
+  if (!items.length) {
+    stockSuggestions.classList.remove("hidden");
+    stockSuggestions.innerHTML = `<div class="suggestion-state">검색 결과가 없습니다.<br>회사명 또는 6자리 종목코드로 다시 검색해보세요.</div>`;
+    return;
+  }
+
+  stockSuggestions.classList.remove("hidden");
+  stockSuggestions.innerHTML = items.map((item, index) => {
+    const english = item.englishName || item.nameEn || "";
+    const subtitle = english || `${item.market || "국내주식"} · ${item.code}`;
+    return `
+      <button type="button" class="stock-suggestion ${index === stockSearchState.activeIndex ? "active" : ""}" data-stock-suggestion="${escapeHtml(item.code)}" role="option" aria-selected="${index === stockSearchState.activeIndex ? "true" : "false"}">
+        <span class="stock-suggestion-logo">${escapeHtml(stockInitials(item.name))}</span>
+        <span class="stock-suggestion-name"><b>${escapeHtml(item.name || item.code)}</b><span>${escapeHtml(subtitle)}</span></span>
+        <span class="stock-suggestion-meta"><b>${escapeHtml(item.code)}</b><span>${escapeHtml(item.market || "KR")}</span></span>
+      </button>`;
+  }).join("");
+
+  stockSuggestions.querySelectorAll("[data-stock-suggestion]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const item = items.find((x) => x.code === button.dataset.stockSuggestion);
+      if (item) setSelectedStock(item);
+    });
+  });
+}
+
+function handleStockSearchKeydown(event) {
+  const items = stockSearchState.items || [];
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    if (!items.length) return;
+    stockSearchState.activeIndex = (stockSearchState.activeIndex + 1 + items.length) % items.length;
+    renderStockSearchSuggestions();
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    if (!items.length) return;
+    stockSearchState.activeIndex = (stockSearchState.activeIndex - 1 + items.length) % items.length;
+    renderStockSearchSuggestions();
+  } else if (event.key === "Enter") {
+    if (items[stockSearchState.activeIndex]) {
+      event.preventDefault();
+      setSelectedStock(items[stockSearchState.activeIndex]);
+    } else {
+      const raw = (stockSearchInput.value || "").trim();
+      if (/^\d{6}$/.test(raw)) {
+        event.preventDefault();
+        setSelectedStock({ code: raw, name: raw, market: "" });
+      }
+    }
+  } else if (event.key === "Escape") {
+    hideStockSuggestions();
+  }
+}
+
+function hideStockSuggestions() {
+  stockSuggestions?.classList.add("hidden");
+}
 
 async function loadSectorList() {
+  updateSectorStats("불러오는 중");
   setSectorProgress("KOSPI·KOSDAQ 업종을 불러오는 중입니다…", true);
   $("loadSectors").disabled = true;
   try {
@@ -137,12 +312,14 @@ async function loadSectorList() {
     sectorGrid.classList.toggle("hidden", sectorState.sectors.length === 0);
     renderSectorCards();
     const errorText = data.errors?.length ? ` · 일부 업종 조회 오류 ${data.errors.length}건` : "";
-    setSectorProgress(`${fmt(sectorState.sectors.length)}개 업종을 불러왔습니다${errorText}. ‘지속 상승 분석’을 누르면 장기 추세 순위가 완성됩니다.`, true);
+    setSectorProgress(`${fmt(sectorState.sectors.length)}개 업종을 불러왔습니다${errorText}. ‘상승 흐름 분석’을 누르면 장기 추세 순위가 완성됩니다.`, true);
+    updateSectorStats("섹터 준비");
   } catch (error) {
     sectorEmpty.classList.remove("hidden");
     sectorGrid.classList.add("hidden");
     sectorEmpty.innerHTML = `<b>섹터를 불러오지 못했습니다.</b><span>${escapeHtml(error.message)}<br>KIS 연결상태와 개인 접속키를 확인해주세요.</span>`;
     setSectorProgress("", false);
+    updateSectorStats("연결 확인");
   } finally {
     $("loadSectors").disabled = false;
   }
@@ -150,6 +327,7 @@ async function loadSectorList() {
 
 async function scanAllSectorTrends() {
   if (sectorState.scanning || !sectorState.sectors.length) return;
+  updateSectorStats("분석 중");
   sectorState.scanning = true;
   $("scanSectors").disabled = true;
   $("loadSectors").disabled = true;
@@ -181,6 +359,19 @@ async function scanAllSectorTrends() {
   const strong = sectors.filter((s) => (sectorState.trends.get(s.id)?.score || 0) >= 70).length;
   setSectorProgress(`분석 완료 · ${success}개 성공${failed ? ` · ${failed}개 오류` : ""} · 상승추세 70점 이상 ${strong}개. 높은 점수부터 정렬했습니다.`, true);
   renderSectorCards();
+  updateSectorStats("분석 완료");
+}
+
+
+function updateSectorStats(statusLabel = null) {
+  const total = sectorState.sectors.length;
+  const trends = [...sectorState.trends.values()].filter(Boolean);
+  const rising = trends.filter((t) => t?.ok && Number(t.score) >= 70).length;
+  const aligned = trends.filter((t) => t?.ok && t.wavePass === true).length;
+  if ($("sectorTotalStat")) $("sectorTotalStat").textContent = total ? fmt(total) : "-";
+  if ($("sectorRisingStat")) $("sectorRisingStat").textContent = trends.length ? fmt(rising) : "-";
+  if ($("sectorAlignedStat")) $("sectorAlignedStat").textContent = trends.length ? fmt(aligned) : "-";
+  if ($("sectorStatusStat") && statusLabel) $("sectorStatusStat").textContent = statusLabel;
 }
 
 function renderSectorCards() {
@@ -207,7 +398,8 @@ function renderSectorCards() {
   });
 
   sectorGrid.innerHTML = items.map((s) => sectorCardHtml(s, sectorState.trends.get(s.id))).join("") || `
-    <div class="empty-state inline-empty"><b>조건에 맞는 섹터가 없습니다.</b><span>필터를 ‘전체’로 바꾸거나 검색어를 지워보세요.</span></div>`;
+    <div class="empty-state"><div class="empty-icon">⌕</div><b>조건에 맞는 섹터가 없습니다.</b><span>필터를 ‘전체 섹터’로 바꾸거나 검색어를 지워보세요.</span></div>`;
+  updateSectorStats(sectorState.scanning ? "분석 중" : (sectorState.trends.size ? "분석 완료" : (sectorState.sectors.length ? "섹터 준비" : "대기")));
 }
 
 function sectorCardHtml(sector, trend) {
@@ -241,7 +433,7 @@ async function openSector(sector) {
   $("sectorTitle").textContent = `${sector.name} · ${sector.market}`;
   $("sectorSubtitle").textContent = "관련기업과 재무 우량순위를 불러오는 중입니다.";
   $("memberCount").textContent = "관련기업 불러오는 중…";
-  memberTableBody.innerHTML = `<tr><td colspan="8" class="empty-cell neutral">관련기업을 불러오는 중입니다.</td></tr>`;
+  memberGrid.innerHTML = `<div class="empty-state"><div class="empty-icon">⌁</div><b>관련기업을 불러오는 중입니다.</b><span>잠시만 기다려주세요.</span></div>`;
   sectorDetail.scrollIntoView({ behavior: "smooth", block: "start" });
 
   let trend = sectorState.trends.get(sector.id);
@@ -266,7 +458,7 @@ async function openSector(sector) {
     $("memberCount").textContent = `관련기업 ${fmt(data.total || sectorState.members.length)}개`;
     renderMembers();
   } catch (error) {
-    memberTableBody.innerHTML = `<tr><td colspan="8" class="empty-cell neg">관련기업 조회 실패: ${escapeHtml(error.message)}</td></tr>`;
+    memberGrid.innerHTML = `<div class="empty-state"><div class="empty-icon">!</div><b>관련기업 조회에 실패했습니다.</b><span>${escapeHtml(error.message)}</span></div>`;
     $("sectorSubtitle").textContent = "관련기업 조회에 실패했습니다.";
   }
 }
@@ -288,10 +480,10 @@ function renderSectorTrendSummary(sector, trend) {
 }
 
 function renderMembers() {
-  if (!memberTableBody) return;
+  if (!memberGrid) return;
   const keyword = ($("memberSearch")?.value || "").trim().toLowerCase();
   const rows = sectorState.members
-    .filter((m) => !keyword || `${m.name} ${m.code}`.toLowerCase().includes(keyword))
+    .filter((m) => !keyword || `${m.name} ${m.code} ${m.englishName || ""}`.toLowerCase().includes(keyword))
     .map((m) => ({ ...m, rank: sectorState.rankings.get(m.code) || null }))
     .sort((a, b) => {
       const ar = a.rank;
@@ -308,35 +500,40 @@ function renderMembers() {
       return (b.marketCap || 0) - (a.marketCap || 0);
     });
 
-  memberTableBody.innerHTML = rows.map((m, index) => memberRowHtml(m, index + 1)).join("") || `<tr><td colspan="8" class="empty-cell neutral">표시할 기업이 없습니다.</td></tr>`;
+  memberGrid.innerHTML = rows.map((m, index) => memberCardHtml(m, index + 1)).join("") || `
+    <div class="empty-state"><div class="empty-icon">⌕</div><b>표시할 기업이 없습니다.</b><span>검색어를 지우거나 다른 섹터를 선택해보세요.</span></div>`;
 }
 
-function memberRowHtml(m, displayRank) {
+function memberCardHtml(m, displayRank) {
   const r = m.rank;
   const annual = r?.annual || [];
   const latest = annual[0] || {};
   const gradeClass = r?.grade === "S" || r?.grade === "A" ? "good" : r?.grade === "B" ? "warn" : "neutral";
-  const revenueText = !r ? "분석 전" : r.revenueGrowing3y ? "3년 연속 ↑" : annual.length >= 2 ? `${r.revenueTransitions || 0}/2 상승` : "자료 부족";
-  const opText = !r ? (isFiniteValue(m.operatingIncome) ? shortNumber(m.operatingIncome) : "-") : r.operatingProfitPositive3y ? "3년 흑자" : isFiniteValue(latest.operatingIncome) ? shortNumber(latest.operatingIncome) : "확인 필요";
+  const revenueText = !r ? "분석 전" : r.revenueGrowing3y ? "3년 연속 상승" : annual.length >= 2 ? `${r.revenueTransitions || 0}/2 구간 상승` : "자료 부족";
+  const opText = !r ? (isFiniteValue(m.operatingIncome) ? shortNumber(m.operatingIncome) : "-") : r.operatingProfitPositive3y ? "3년 연속 흑자" : isFiniteValue(latest.operatingIncome) ? shortNumber(latest.operatingIncome) : "확인 필요";
   const cap = isFiniteValue(m.marketCap) ? `${fmt(m.marketCap)}억` : "-";
+  const qualityHit = r?.revenueGrowing3y && Number(r.debtRatio) < 150;
+  const english = m.englishName ? `<span>${escapeHtml(m.englishName)}</span>` : "";
   return `
-    <tr class="company-row ${r?.revenueGrowing3y && Number(r.debtRatio) < 150 ? "quality-hit" : ""}">
-      <td>
-        <div class="company-cell"><span class="rank-no">${displayRank}</span><div><b>${escapeHtml(m.name)}</b><small>${escapeHtml(m.code)} · ${escapeHtml(m.market)} · 시총 ${cap}</small></div></div>
-      </td>
-      <td>${r ? `<span class="grade-badge ${gradeClass}">${escapeHtml(r.grade)}</span> <b>${fmt(r.score)}</b>` : `<span class="analysis-wait">분석 전</span>`}</td>
-      <td class="${r?.revenueGrowing3y ? "pos" : "neutral"}">${escapeHtml(revenueText)}</td>
-      <td class="${r && Number(r.debtRatio) < 150 ? "pos" : r?.debtRatio != null ? "neg" : "neutral"}">${r ? fmtPct(r.debtRatio) : "-"}</td>
-      <td>${r ? fmtPct(r.reserveRatio) : "-"}</td>
-      <td class="${signClass(r?.roe)}">${r ? fmtPct(r.roe) : (isFiniteValue(m.roe) ? fmtPct(m.roe) : "-")}</td>
-      <td class="${r?.operatingProfitPositive3y ? "pos" : "neutral"}">${escapeHtml(opText)}</td>
-      <td>
-        <div class="row-actions">
-          <a class="mini-link npay" href="${npayUrl(m.code)}" target="_blank" rel="noopener noreferrer">Npay 차트 ↗</a>
-          <button class="mini-button" data-stock-detail="${escapeHtml(m.code)}">FF 상세</button>
-        </div>
-      </td>
-    </tr>`;
+    <article class="company-card ${qualityHit ? "quality-hit" : ""}">
+      <div class="company-card-top">
+        <span class="rank-no">${displayRank}</span>
+        <div class="company-name"><b>${escapeHtml(m.name)}</b>${english}<small>${escapeHtml(m.code)} · ${escapeHtml(m.market)} · 시총 ${cap}</small></div>
+        <div class="grade-box">${r ? `<span class="grade-badge ${gradeClass}">${escapeHtml(r.grade)}</span><span class="grade-score">${fmt(r.score)}</span>` : `<span class="analysis-wait">분석 전</span>`}</div>
+      </div>
+      <div class="company-metrics">
+        <div class="company-metric"><small>3년 매출</small><b class="${r?.revenueGrowing3y ? "pos" : "neutral"}">${escapeHtml(revenueText)}</b></div>
+        <div class="company-metric"><small>부채비율</small><b class="${r && Number(r.debtRatio) < 150 ? "pos" : r?.debtRatio != null ? "neg" : "neutral"}">${r ? fmtPct(r.debtRatio) : "-"}</b></div>
+        <div class="company-metric"><small>유보율</small><b>${r ? fmtPct(r.reserveRatio) : "-"}</b></div>
+        <div class="company-metric"><small>ROE</small><b class="${signClass(r?.roe)}">${r ? fmtPct(r.roe) : (isFiniteValue(m.roe) ? fmtPct(m.roe) : "-")}</b></div>
+        <div class="company-metric"><small>영업이익</small><b class="${r?.operatingProfitPositive3y ? "pos" : "neutral"}">${escapeHtml(opText)}</b></div>
+        <div class="company-metric"><small>FF 기업질</small><b>${r ? `${escapeHtml(r.grade)} · ${fmt(r.score)}점` : "분석 필요"}</b></div>
+      </div>
+      <div class="company-actions">
+        <a class="mini-link npay" href="${npayUrl(m.code)}" target="_blank" rel="noopener noreferrer">Npay 차트 ↗</a>
+        <button class="mini-button" data-stock-detail="${escapeHtml(m.code)}" data-stock-name="${escapeHtml(m.name)}" data-stock-market="${escapeHtml(m.market)}" data-stock-english="${escapeHtml(m.englishName || "")}">FF 상세분석</button>
+      </div>
+    </article>`;
 }
 
 async function rankSelectedSectorMembers() {
@@ -395,11 +592,13 @@ function setRankProgress(text, visible) {
 function updateNpayTopLink(code) {
   const link = $("npayTopLink");
   if (!link) return;
-  link.href = /^\d{6}$/.test(code || "") ? npayUrl(code) : "https://finance.naver.com/";
+  const valid = /^\d{6}$/.test(code || "");
+  link.href = valid ? npayUrl(code) : "https://m.stock.naver.com/";
+  link.classList.toggle("disabled-link", !valid);
 }
 
 function npayUrl(code) {
-  return `https://finance.naver.com/item/main.nhn?code=${encodeURIComponent(code)}`;
+  return `https://m.stock.naver.com/domestic/stock/${encodeURIComponent(code)}/total`;
 }
 
 function sleep(ms) {
@@ -492,8 +691,13 @@ $("testAll").addEventListener("click", async () => {
 });
 
 $("analyze").addEventListener("click", async () => {
-  const code = $("stockCode").value.trim();
-  const corp = $("corpCode").value.trim();
+  let code = stockCodeInput.value.trim();
+  const typedQuery = (stockSearchInput?.value || "").trim();
+  if (!code && /^\d{6}$/.test(typedQuery)) {
+    code = typedQuery;
+    setSelectedStock({ code, name: typedQuery, market: "" });
+  }
+  const corp = corpCodeInput.value.trim();
   if (!/^\d{6}$/.test(code)) return alert("종목코드는 6자리 숫자입니다.");
   if (corp && !/^\d{8}$/.test(corp)) return alert("DART 기업고유번호는 8자리 숫자입니다.");
 
@@ -535,6 +739,7 @@ function renderResult(d) {
   const sourceErrors = Array.isArray(d.sourceErrors) ? d.sourceErrors : [];
   const companyName = identity.name || snap.name || d.code;
   const sectorText = identity.sector || snap.industry || identity.industryStandard || "업종정보 확인 중";
+  setSelectedStock({ code: d.code, name: companyName, market: identity.market || "", englishName: identity.englishName || selectedStockEnglish?.textContent || "" });
 
   result.innerHTML = `
     <div class="result-title company-title">
@@ -652,6 +857,7 @@ function companyAccordion(identity, snap) {
       <div class="accordion-body">
         <div class="kv wide-kv">
           <span>기업명</span><span>${escapeHtml(identity.name || snap.name || "-")}</span>
+          <span>영문명</span><span>${escapeHtml(identity.englishName || "-")}</span>
           <span>종목코드</span><span>${escapeHtml(identity.code || "-")}</span>
           <span>시장</span><span>${escapeHtml(identity.market || "-")}</span>
           <span>대표 업종/섹터</span><span>${escapeHtml(sector)}</span>

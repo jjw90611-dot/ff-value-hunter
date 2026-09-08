@@ -4,84 +4,147 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="color-scheme" content="light" />
+  <meta name="theme-color" content="#0b1f3a" />
   <title>FF Value Hunter · 산업부터 찾는 가치투자 스캐너</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <main class="wrap">
-    <header class="hero sector-hero">
-      <div class="eyebrow">FIVE-FINGER VALUE INVESTING · INDUSTRY FIRST</div>
-      <h1>FF Value Hunter</h1>
-      <p>종목을 먼저 검색하지 않습니다. <b>상승 산업 → 우량기업 → 수급 → 가격</b> 순서로 후보를 좁힙니다.</p>
-      <div class="pillrow">
-        <span class="pill">산업 파도 우선</span>
-        <span class="pill">3년 매출 성장</span>
-        <span class="pill">부채비율 150% 기준</span>
-        <span class="pill">외국인·기관 지속매집 가점</span>
-        <span class="pill">자동주문 없음</span>
-        <span class="pill">v0.4</span>
+  <div class="page-glow page-glow-a"></div>
+  <div class="page-glow page-glow-b"></div>
+
+  <main class="app-shell">
+    <nav class="topbar">
+      <a class="brand" href="#top" aria-label="FF Value Hunter 홈">
+        <span class="brand-mark">FF</span>
+        <span class="brand-copy"><b>Value Hunter</b><small>Industry-first investing</small></span>
+      </a>
+      <div class="topbar-actions">
+        <span class="live-badge"><i></i> KIS 기반</span>
+        <a class="ghost-link" href="#step3">기업 검색</a>
+        <a class="ghost-link" href="#diagnostics">API 상태</a>
+      </div>
+    </nav>
+
+    <header class="hero" id="top">
+      <div class="hero-copy">
+        <div class="eyebrow"><span></span> FIVE-FINGER VALUE INVESTING</div>
+        <h1>차트보다 먼저,<br><em>산업의 파도</em>를 봅니다.</h1>
+        <p>상승하는 산업을 찾고 → 그 안에서 매출이 꾸준히 늘고 안정적인 기업을 고른 뒤 → 외국인·기관 수급과 가격을 검증합니다.</p>
+        <div class="hero-actions">
+          <a class="cta primary-cta" href="#step1">상승 산업 찾기 <span>→</span></a>
+          <a class="cta secondary-cta" href="#step3">기업명으로 바로 검색</a>
+        </div>
+        <div class="hero-trust">
+          <span>자동매수·매도 없음</span>
+          <span>기업 선별 보조도구</span>
+          <span>v0.5</span>
+        </div>
+      </div>
+
+      <div class="hero-visual" aria-hidden="true">
+        <div class="market-window glass-card">
+          <div class="market-window-top">
+            <span class="window-dot"></span><span class="window-dot"></span><span class="window-dot"></span>
+            <b>INDUSTRY WAVE</b>
+          </div>
+          <div class="wave-metrics">
+            <div><small>산업점수</small><strong>91</strong><span>강한 상승</span></div>
+            <div><small>3년 매출</small><strong>↗</strong><span>연속 성장</span></div>
+            <div><small>수급</small><strong>+82</strong><span>기관·외인</span></div>
+          </div>
+          <svg class="hero-chart" viewBox="0 0 520 210" role="img" aria-label="상승 산업을 상징하는 추세 그래프">
+            <defs>
+              <linearGradient id="area" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stop-color="#45d1a7" stop-opacity=".34"/>
+                <stop offset="100%" stop-color="#45d1a7" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <path d="M18 177 C68 165 82 142 126 148 C170 154 184 114 229 120 C276 126 299 78 338 88 C382 99 411 45 498 36 L498 202 L18 202 Z" fill="url(#area)"/>
+            <path d="M18 177 C68 165 82 142 126 148 C170 154 184 114 229 120 C276 126 299 78 338 88 C382 99 411 45 498 36" fill="none" stroke="#45d1a7" stroke-width="6" stroke-linecap="round"/>
+            <path d="M18 188 C95 174 156 166 224 152 C302 137 372 117 498 93" fill="none" stroke="#85a5ff" stroke-width="2.4" stroke-dasharray="7 8" opacity=".86"/>
+          </svg>
+          <div class="hero-sector-tags"><span>반도체</span><span>조선</span><span>전력기기</span><span>산업재</span></div>
+        </div>
+        <div class="floating-score glass-card"><small>FF 후보</small><strong>S</strong><span>5/5 조건 통과</span></div>
+        <div class="floating-flow glass-card"><span>외국인</span><b>20일 누적 +</b><i>↗</i></div>
       </div>
     </header>
 
-    <section class="panel access-panel compact-access">
-      <div>
-        <h2>개인 접속</h2>
-        <p>Cloudflare의 <code>APP_ACCESS_KEY</code>를 입력합니다. 브라우저 세션에만 저장됩니다.</p>
-      </div>
-      <div class="access-row">
-        <input id="accessKey" type="password" placeholder="APP_ACCESS_KEY" autocomplete="off" />
-        <button id="saveAccess">적용</button>
-      </div>
-      <div id="accessMsg" class="small muted"></div>
+    <section class="guide-grid" aria-label="사용 순서">
+      <div class="guide-block"><span class="guide-no">01</span><div><b>산업 찾기</b><small>정배열과 20·60·120일 흐름</small></div><i>↗</i></div>
+      <div class="guide-block"><span class="guide-no">02</span><div><b>기업 고르기</b><small>3년 매출·영업이익·안정성</small></div><i>↗</i></div>
+      <div class="guide-block"><span class="guide-no">03</span><div><b>최종 검증</b><small>수급·가격·Npay 증권 차트</small></div><i>✓</i></div>
     </section>
 
-    <section class="panel sector-radar-panel">
-      <div class="section-head sector-head">
+    <details class="access-drawer">
+      <summary><span><i class="access-dot"></i> 개인 접속키 설정</span><small>처음 한 번만 설정</small></summary>
+      <div class="access-body">
         <div>
-          <div class="step-kicker">STEP 1 · 산업의 파도</div>
+          <b>Cloudflare APP_ACCESS_KEY</b>
+          <p>키는 현재 브라우저 세션에만 저장됩니다.</p>
+        </div>
+        <div class="access-row">
+          <input id="accessKey" type="password" placeholder="APP_ACCESS_KEY" autocomplete="off" />
+          <button id="saveAccess" class="soft-button">적용</button>
+        </div>
+        <div id="accessMsg" class="small muted"></div>
+      </div>
+    </details>
+
+    <section class="step-section" id="step1">
+      <div class="step-heading">
+        <div class="step-number">STEP 1</div>
+        <div>
           <h2>상승 산업 · 섹터 레이더</h2>
-          <p>KOSPI·KOSDAQ 공식 업종을 불러온 뒤 20·60·120일선과 기울기를 계산해 <b>계속 상승하는 섹터</b>를 위로 올립니다.</p>
+          <p>먼저 <b>어떤 산업이 계속 상승하고 있는지</b> 찾습니다. 종목은 그 다음입니다.</p>
         </div>
-        <div class="action-row">
-          <button id="loadSectors">섹터 불러오기</button>
-          <button id="scanSectors" class="primary" disabled>지속 상승 분석</button>
+        <div class="step-actions">
+          <button id="loadSectors" class="secondary-button"><span>1</span> 섹터 불러오기</button>
+          <button id="scanSectors" class="primary-button" disabled><span>2</span> 상승 흐름 분석</button>
         </div>
       </div>
 
-      <div class="flow-strip">
-        <span><b>①</b> 상승 섹터</span><i>→</i><span><b>②</b> 관련 기업</span><i>→</i><span><b>③</b> 매출·안정성 순위</span><i>→</i><span><b>④</b> 수급·Npay 차트 확인</span>
+      <div class="stat-strip">
+        <div><small>전체 섹터</small><b id="sectorTotalStat">-</b></div>
+        <div><small>상승 70점+</small><b id="sectorRisingStat">-</b></div>
+        <div><small>정배열</small><b id="sectorAlignedStat">-</b></div>
+        <div><small>상태</small><b id="sectorStatusStat" class="status-text">대기</b></div>
       </div>
 
-      <div class="toolbar">
+      <div class="market-toolbar">
         <div class="filter-chips" id="sectorFilters">
           <button class="chip active" data-filter="rising">상승추세 우선</button>
           <button class="chip" data-filter="aligned">정배열만</button>
-          <button class="chip" data-filter="all">전체</button>
+          <button class="chip" data-filter="all">전체 섹터</button>
         </div>
-        <input id="sectorSearch" class="search-input" placeholder="섹터 검색 · 예: 반도체, 철강" />
+        <div class="search-shell compact-search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z"/></svg>
+          <input id="sectorSearch" placeholder="섹터 검색 · 반도체, 철강, 조선" />
+        </div>
       </div>
 
       <div id="sectorProgress" class="progress-note hidden"></div>
       <div id="sectorEmpty" class="empty-state">
-        <b>먼저 ‘섹터 불러오기’를 눌러주세요.</b>
-        <span>오늘 등락률은 바로 표시되고, ‘지속 상승 분석’을 누르면 장기 추세점수가 채워집니다.</span>
+        <div class="empty-icon">⌁</div>
+        <b>아직 산업 데이터를 불러오지 않았습니다.</b>
+        <span>위의 <strong>‘섹터 불러오기’</strong>를 누른 다음 <strong>‘상승 흐름 분석’</strong>을 누르세요.</span>
       </div>
       <div id="sectorGrid" class="sector-grid hidden"></div>
     </section>
 
-    <section id="sectorDetail" class="panel hidden">
-      <div class="section-head sector-detail-head">
+    <section id="sectorDetail" class="step-section hidden">
+      <div class="step-heading sector-detail-heading">
+        <div class="step-number">STEP 2</div>
         <div>
-          <div class="step-kicker">STEP 2 · 산업 안에서 기업 찾기</div>
           <h2 id="sectorTitle">선택 섹터</h2>
-          <p id="sectorSubtitle"></p>
+          <p id="sectorSubtitle">관련기업을 불러오는 중입니다.</p>
         </div>
-        <button id="rankMembers" class="primary">매출·안정성 우량순 분석</button>
+        <button id="rankMembers" class="primary-button">우량기업 순으로 정렬</button>
       </div>
 
       <div id="sectorTrendSummary" class="sector-trend-summary"></div>
-      <details id="sectorChartAcc" class="accordion sector-chart-accordion">
-        <summary><span>섹터 지수 차트 · MA20 / 60 / 120</span><span class="accordion-meta">산업의 파도 확인</span></summary>
+      <details id="sectorChartAcc" class="modern-accordion sector-chart-accordion">
+        <summary><span><b>섹터 지수 차트</b><small>MA20 · MA60 · MA120으로 산업의 파도 확인</small></span><i>+</i></summary>
         <div class="accordion-body">
           <div class="chart-box"><canvas id="sectorChart" class="chart"></canvas></div>
           <div class="legend">
@@ -93,84 +156,94 @@
         </div>
       </details>
 
-      <div class="member-toolbar">
-        <div>
-          <b id="memberCount">관련기업 -</b>
-          <span class="muted">초기에는 시가총액 순. 우량분석 후 3개년 매출·부채비율·유보율·ROE를 반영해 재정렬합니다.</span>
+      <div class="member-head">
+        <div><b id="memberCount">관련기업 -</b><small>처음엔 시가총액 순 · 분석 후 매출과 안정성 중심으로 재정렬</small></div>
+        <div class="search-shell compact-search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z"/></svg>
+          <input id="memberSearch" placeholder="이 섹터 안에서 기업 검색" />
         </div>
-        <input id="memberSearch" class="search-input" placeholder="기업명/종목코드 검색" />
       </div>
       <div id="rankProgress" class="progress-note hidden"></div>
-      <div class="table-wrap company-table-wrap">
-        <table class="company-table">
-          <thead>
-            <tr>
-              <th>순위 / 기업</th>
-              <th>우량점수</th>
-              <th>3년 매출</th>
-              <th>부채비율</th>
-              <th>유보율</th>
-              <th>ROE</th>
-              <th>영업이익</th>
-              <th>차트 / 상세</th>
-            </tr>
-          </thead>
-          <tbody id="memberTableBody"></tbody>
-        </table>
-      </div>
-      <div class="note methodology-note">
-        우량점수는 <b>3개년 매출 우상향 30점 + 영업이익 안정성 20점 + 부채비율 20점 + 유보율 10점 + ROE 10점 + 영업이익률 10점</b>을 중심으로 계산합니다. 현재는 ‘기업의 질’ 순위이며, 외국인·기관 지속매집과 저평가 점수는 상세분석/다음 스캐너 단계에서 합칩니다.
+      <div id="memberGrid" class="company-grid"></div>
+      <div class="method-card">
+        <div class="method-icon">FF</div>
+        <div><b>우량기업 점수는 이렇게 계산합니다.</b><p>3개년 매출 우상향 30점 + 영업이익 안정성 20점 + 부채비율 20점 + 유보율 10점 + ROE 10점 + 영업이익률 10점</p></div>
       </div>
     </section>
 
-    <section class="panel stock-detail-panel">
-      <div class="section-head">
+    <section class="step-section stock-detail-panel" id="step3">
+      <div class="step-heading search-step-heading">
+        <div class="step-number">STEP 3</div>
         <div>
-          <div class="step-kicker">STEP 3 · 선택 기업 검증</div>
-          <h2>종목 상세분석</h2>
-          <p>섹터에서 고른 기업의 가격·외국인/기관 수급·최근 3년/4분기 실적·유보율·부채비율을 확인합니다.</p>
+          <h2>선택 기업 검증</h2>
+          <p>종목코드를 몰라도 됩니다. <b>회사명만 검색</b>해서 선택하세요.</p>
         </div>
       </div>
-      <div class="form-grid stock-form-grid">
-        <label>
-          <span>종목코드</span>
-          <input id="stockCode" value="005930" maxlength="6" inputmode="numeric" />
-        </label>
-        <label class="dart-field">
-          <span>DART 기업고유번호 <em>선택</em></span>
-          <input id="corpCode" value="" maxlength="8" inputmode="numeric" placeholder="비워도 분석 가능" />
-        </label>
-        <button id="analyze" class="primary analyze-btn">상세분석</button>
-        <a id="npayTopLink" class="npay-link button-link" href="https://finance.naver.com/item/main.nhn?code=005930" target="_blank" rel="noopener noreferrer">Npay 증권 ↗</a>
+
+      <div class="stock-search-card">
+        <div class="stock-search-label"><span>기업 검색</span><small>회사명 · 영문명 · 종목코드</small></div>
+        <div class="stock-search-wrap">
+          <div class="search-shell stock-search-shell">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z"/></svg>
+            <input id="stockSearch" type="search" autocomplete="off" placeholder="예: 삼성전자, Samsung, 005930" aria-autocomplete="list" aria-controls="stockSuggestions" />
+            <kbd>Ctrl K</kbd>
+          </div>
+          <div id="stockSuggestions" class="stock-suggestions hidden" role="listbox"></div>
+        </div>
+
+        <input id="stockCode" type="hidden" value="" />
+
+        <div id="selectedStockBar" class="selected-stock hidden">
+          <div class="selected-logo" id="selectedStockLogo">ST</div>
+          <div class="selected-copy">
+            <b id="selectedStockName">선택 기업</b>
+            <span id="selectedStockEnglish"></span>
+            <small><span id="selectedStockCode">-</span> · <span id="selectedStockMarket">-</span></small>
+          </div>
+          <span class="selected-check">선택됨 ✓</span>
+        </div>
+
+        <div class="stock-action-row">
+          <button id="analyze" class="primary-button analyze-btn" disabled>기업 상세분석</button>
+          <a id="npayTopLink" class="npay-button disabled-link" href="https://m.stock.naver.com/" target="_blank" rel="noopener noreferrer">Npay 증권에서 차트 보기 ↗</a>
+          <details class="advanced-options">
+            <summary>고급 옵션</summary>
+            <div class="advanced-body">
+              <label for="corpCode"><span>DART 기업고유번호 <em>선택</em></span></label>
+              <input id="corpCode" value="" maxlength="8" inputmode="numeric" placeholder="몰라도 됩니다. 비워두세요." />
+              <small>DART 공시 연결이 필요할 때만 8자리 기업고유번호를 넣습니다.</small>
+            </div>
+          </details>
+        </div>
       </div>
 
-      <div id="loading" class="loading hidden">KIS 호출 제한을 피하기 위해 기업정보·시세·수급·재무·차트를 순서대로 불러오는 중입니다. 잠시 기다려주세요.</div>
+      <div id="loading" class="loading hidden"><span class="spinner"></span><div><b>기업 데이터를 분석하고 있습니다.</b><small>KIS 호출 제한을 피하기 위해 시세 → 수급 → 재무 → 차트를 순서대로 불러옵니다.</small></div></div>
       <div id="result" class="result hidden"></div>
     </section>
 
-    <details class="panel diagnostics-panel">
-      <summary>API 연결 상태 · 개발자 설정</summary>
+    <details class="diagnostics-panel" id="diagnostics">
+      <summary><span>API 연결 상태 · 개발자 설정</span><small>문제가 있을 때만 열어보세요.</small></summary>
       <div class="diagnostics-inner">
         <div class="section-head">
-          <div>
-            <h2>API 연결 점검</h2>
-            <p>종목 발굴의 핵심은 KIS입니다. DART·KRX·ECOS는 보조 데이터로 단계적으로 사용합니다.</p>
-          </div>
-          <button id="testAll">전체 연결 점검</button>
+          <div><h2>API 연결 점검</h2><p>산업·기업 발굴의 핵심은 KIS이며 DART·KRX·ECOS는 보조 데이터입니다.</p></div>
+          <button id="testAll" class="secondary-button">전체 연결 점검</button>
         </div>
         <div id="deployNotice" class="deploy-notice hidden"></div>
         <div id="apiCards" class="cards"></div>
         <details class="diagnostic">
-          <summary>Cloudflare 연결 문제 해결 보기</summary>
+          <summary>Cloudflare 연결 문제 해결</summary>
           <div class="diagnostic-body">
-            <p><b>중요:</b> Variables and Secrets에 값을 입력한 뒤 <b>Deploy</b>를 눌러 현재 Worker 버전에 반영해야 합니다.</p>
+            <p><b>중요:</b> Variables and Secrets에 값을 입력한 뒤 <b>Deploy</b>까지 해야 현재 Worker에 반영됩니다.</p>
             <p><code>APP_ACCESS_KEY</code>, <code>DART_API_KEY</code>, <code>ECOS_API_KEY</code>, <code>KIS_APP_KEY</code>, <code>KIS_APP_SECRET</code>, <code>KRX_AUTH_KEY</code>는 Secret 타입을 권장합니다.</p>
           </div>
         </details>
       </div>
     </details>
 
-    <footer>FF Value Hunter v0.4 · 산업 → 기업 → 수급 → 가격 · 기업 선별 보조도구 · 자동주문 없음</footer>
+    <footer>
+      <div class="brand footer-brand"><span class="brand-mark">FF</span><span class="brand-copy"><b>Value Hunter</b><small>산업 → 기업 → 수급 → 가격</small></span></div>
+      <p>기업 선별을 돕는 개인용 가치투자 도구 · 자동주문 기능 없음 · v0.5</p>
+    </footer>
   </main>
   <script src="/app.js" type="module"></script>
 </body>
