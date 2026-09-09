@@ -25,6 +25,7 @@ const providers = [
 
 let lastAnalysis = null;
 let resizeTimer = null;
+let analyzeProgressTimer = null;
 const stockSearchState = { items: [], activeIndex: -1, timer: null, lastQuery: "" };
 
 accessKey.value = sessionStorage.getItem("ff_access_key") || "";
@@ -60,6 +61,23 @@ async function api(path) {
   return data;
 }
 
+async function apiPost(path, payload) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { ...headers(), "content-type": "application/json; charset=utf-8" },
+    cache: "no-store",
+    body: JSON.stringify(payload || {}),
+  });
+  const data = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
+  if (!res.ok || data.ok === false) {
+    const err = new Error(data.error || data.message || `HTTP ${res.status}`);
+    err.status = res.status;
+    err.payload = data;
+    throw err;
+  }
+  return data;
+}
+
 function drawCards() {
   apiCards.innerHTML = providers.map((p) => `
     <div class="card" id="card-${p.id}">
@@ -72,7 +90,7 @@ function drawCards() {
 drawCards();
 
 // -----------------------------
-// v0.8 산업 → 저평가 우량주 발굴 흐름
+// v1.0 산업 → 저평가 우량주 → Evidence Gate → 기업 검증 흐름
 // -----------------------------
 const sectorGrid = $("sectorGrid");
 const sectorEmpty = $("sectorEmpty");
@@ -80,6 +98,16 @@ const sectorProgress = $("sectorProgress");
 const sectorDetail = $("sectorDetail");
 const memberGrid = $("memberGrid");
 const rankProgress = $("rankProgress");
+const looperaSection = $("step3");
+const runLooperaAdviceButton = $("runLooperaAdvice");
+const looperaReady = $("looperaReady");
+const looperaProgress = $("looperaProgress");
+const looperaOverview = $("looperaOverview");
+const looperaAdviceGrid = $("looperaAdviceGrid");
+const researchMemoryPanel = $("researchMemoryPanel");
+const researchMemoryList = $("researchMemoryList");
+const RESEARCH_MEMORY_KEY = "ff_loopera_research_memory_v1";
+const looperaState = { items: new Map(), running: false, lastSectorId: null };
 
 const sectorState = {
   sectors: [],
@@ -96,6 +124,20 @@ $("scanSectors")?.addEventListener("click", scanAllSectorTrends);
 $("rankMembers")?.addEventListener("click", rankSelectedSectorMembers);
 $("sectorSearch")?.addEventListener("input", renderSectorCards);
 $("memberSearch")?.addEventListener("input", renderMembers);
+runLooperaAdviceButton?.addEventListener("click", runLooperaAdviceScan);
+$("clearResearchMemory")?.addEventListener("click", () => {
+  localStorage.removeItem(RESEARCH_MEMORY_KEY);
+  renderResearchMemory();
+});
+looperaAdviceGrid?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-loopera-select]");
+  if (!button) return;
+  const code = String(button.dataset.looperaSelect || "");
+  const member = sectorState.members.find((item) => item.code === code) || { code, name: button.dataset.stockName || code, market: button.dataset.stockMarket || "" };
+  setSelectedStock(member);
+  document.querySelector("#step4")?.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+renderResearchMemory();
 
 $("sectorFilters")?.addEventListener("click", (event) => {
   const btn = event.target.closest("[data-filter]");
@@ -306,6 +348,7 @@ async function loadSectorList() {
     sectorState.selected = null;
     sectorState.members = [];
     sectorState.rankings.clear();
+    resetLooperaSection();
     sectorDetail.classList.add("hidden");
     $("scanSectors").disabled = sectorState.sectors.length === 0;
     sectorEmpty.classList.toggle("hidden", sectorState.sectors.length > 0);
@@ -338,7 +381,7 @@ async function scanAllSectorTrends() {
   let failed = 0;
   for (let i = 0; i < sectors.length; i++) {
     const sector = sectors[i];
-    setSectorProgress(`산업 파도 분석 ${i + 1}/${sectors.length} · ${sector.name} · KIS 호출제한을 피하기 위해 순차 처리 중`, true);
+    setSectorProgress(`산업 파도 분석 · ${sector.name}`, true, Math.round(((i + 1) / sectors.length) * 100), `${i + 1}/${sectors.length} 섹터`);
     try {
       const q = new URLSearchParams({ market: sector.marketCode, code: sector.code });
       const data = await api(`/api/sector-trend?${q}`);
@@ -357,7 +400,7 @@ async function scanAllSectorTrends() {
   $("scanSectors").disabled = false;
   $("loadSectors").disabled = false;
   const strong = sectors.filter((s) => (sectorState.trends.get(s.id)?.score || 0) >= 74).length;
-  setSectorProgress(`분석 완료 · ${success}개 성공${failed ? ` · ${failed}개 오류` : ""} · A등급(74점) 이상 ${strong}개. 실제 기울기·수익률을 반영한 소수점 점수로 정렬했습니다.`, true);
+  setSectorProgress(`분석 완료 · ${success}개 성공${failed ? ` · ${failed}개 오류` : ""} · A등급(74점) 이상 ${strong}개`, true, 100, "완료");
   renderSectorCards();
   updateSectorStats("분석 완료");
 }
@@ -432,6 +475,7 @@ async function openSector(sector) {
   sectorState.selected = sector;
   sectorState.members = [];
   sectorState.rankings.clear();
+  resetLooperaSection();
   if ($("memberSearch")) $("memberSearch").value = ""; // 이전 섹터 검색어가 남아 새 섹터 종목을 숨기는 문제 방지
   sectorDetail.classList.remove("hidden");
   $("sectorTitle").textContent = `${sector.name} · ${sector.market}`;
@@ -565,7 +609,14 @@ function memberCardHtml(m, displayRank) {
         <div class="company-metric"><small>PER / PBR</small><b>${fmt2(v.per)} / ${fmt2(v.pbr)}</b></div>
         <div class="company-metric"><small>ROE / 부채</small><b>${fmtPct(r?.roe)} / ${fmtPct(r?.debtRatio)}</b></div>
         <div class="company-metric"><small>3년 매출</small><b class="${r?.revenueGrowing3y ? "pos" : "neutral"}">${escapeHtml(revenueText)}</b></div>
+        <div class="company-metric"><small>최근 4분기 검증</small><b class="${r?.quarterlyMetrics?.testPass === true ? "pos" : r?.quarterlyMetrics?.testPass === false ? "neg" : "neutral"}">${r?.quarterlyMetrics?.testPass === true ? "통과" : r?.quarterlyMetrics?.testPass === false ? "미통과" : "자료부족"} · ${r?.quarterlyMetrics?.score != null ? fmt1(r.quarterlyMetrics.score)+"/50" : "-"}</b></div>
+        <div class="company-metric"><small>TTM 매출 / 영업익</small><b>${r?.quarterlyMetrics?.ttmRevenueGrowth == null ? "-" : signedPctPlain(r.quarterlyMetrics.ttmRevenueGrowth)} / ${r?.quarterlyMetrics?.ttmOperatingGrowth == null ? "-" : signedPctPlain(r.quarterlyMetrics.ttmOperatingGrowth)}</b></div>
+        <div class="company-metric"><small>외국인·기관 매집</small><b class="${Number(r?.accumulationScore) >= 68 ? "pos" : Number.isFinite(Number(r?.accumulationScore)) ? "neutral" : ""}">${r?.accumulationScore != null ? `${fmt1(r.accumulationScore)}/100` : "2단계 검증 대기"}</b></div>
+        <div class="company-metric"><small>1년 주가 vs 실적</small><b class="${Number(r?.price1yChangePct) < 0 && Number(r?.fundamentalPriceDivergenceBonus) > 0 ? "pos" : ""}">${r?.price1yChangePct == null ? "-" : signedPctPlain(r.price1yChangePct)}${Number(r?.fundamentalPriceDivergenceBonus) > 0 ? ` · 괴리 +${fmt1(r.fundamentalPriceDivergenceBonus)}` : ""}</b></div>
+        <div class="company-metric risk-metric"><small>공시·뉴스 위험</small><b class="${Number(r?.riskPenalty) > 0 ? "neg" : Number.isFinite(Number(r?.riskPenalty)) ? "pos" : "neutral"}">${r?.riskPenalty == null ? "상위후보 검증" : `-${fmt1(r.riskPenalty)}점`}</b></div>
       </div>
+      ${r?.accumulation?.signals?.length ? `<div class="signal-row">${r.accumulation.signals.slice(0,3).map(x=>`<span>${escapeHtml(x)}</span>`).join("")}</div>` : ""}
+      ${r?.risk?.disclosure?.items?.length ? `<div class="value-warning">⚠ 최근 공시: ${escapeHtml(r.risk.disclosure.items.slice(0,2).map(x=>x.title).join(" · "))}</div>` : ""}
       ${targetText ? `<div class="analyst-row">${targetText}</div>` : ""}
       ${trap}
       <div class="company-actions">
@@ -582,11 +633,10 @@ async function rankSelectedSectorMembers() {
   sectorState.rankings.clear();
   renderMembers();
 
-  // 대형주만 분석되는 편향을 줄이기 위해 대·중·소형 구간을 고르게 뽑습니다.
-  const candidates = selectDiverseCandidates(sectorState.members, 72);
+  const candidates = selectDiverseCandidates(sectorState.members, 60);
   let completed = 0;
   let errors = 0;
-  setRankProgress(`저평가 우량주 분석 시작 · 대·중·소형주를 고르게 ${candidates.length}개 추출했습니다. Quality와 밸류에이션 데이터를 순차 분석합니다.`, true);
+  setRankProgress(`1단계 · 분기/연간 실적과 Value 원자료를 수집합니다.`, true, 1, `0/${candidates.length}`);
 
   for (let i = 0; i < candidates.length; i += 6) {
     const batch = candidates.slice(i, i + 6);
@@ -598,7 +648,9 @@ async function rankSelectedSectorMembers() {
     } catch (error) {
       errors += batch.length;
     }
-    setRankProgress(`Quality·Value 원자료 ${Math.min(i + batch.length, candidates.length)}/${candidates.length} · PER·PBR·ROE·52주 위치·실적·안정성 수집 중`, true);
+    const done = Math.min(i + batch.length, candidates.length);
+    const pct = Math.round((done / Math.max(1, candidates.length)) * 62);
+    setRankProgress(`1단계 · 분기 매출·영업이익률 · 연간 성장 · PER/PBR/ROE · 52주 위치`, true, pct, `${done}/${candidates.length} 기업`);
     renderMembers();
     await sleep(520);
   }
@@ -608,36 +660,367 @@ async function rankSelectedSectorMembers() {
   for (const item of scored) sectorState.rankings.set(item.code, item);
   renderMembers();
 
-  // 증권사 목표가는 커버리지 편향이 있으므로 상위 후보에만 보조가점(최대 +4)을 적용합니다.
-  const topForOpinion = [...scored]
+  // 2단계: 상위 후보에만 수급·거래량·1년 가격괴리·DART/뉴스 리스크를 붙입니다.
+  const deepCandidates = [...scored]
     .filter((x) => Number.isFinite(Number(x.finalScore)))
     .sort((a, b) => b.finalScore - a.finalScore)
-    .slice(0, 8);
+    .slice(0, Math.min(16, scored.length));
+
+  for (let i = 0; i < deepCandidates.length; i++) {
+    const item = deepCandidates[i];
+    const member = sectorState.members.find((m) => m.code === item.code);
+    const name = member?.name || item.code;
+    const pct = 62 + Math.round(((i + 1) / Math.max(1, deepCandidates.length)) * 27);
+    setRankProgress(`2단계 · 외국인/기관 지속매집 · 거래량 패턴 · 공시/뉴스 위험 검증`, true, pct, `${i + 1}/${deepCandidates.length} · ${name}`);
+    try {
+      const q = new URLSearchParams({ code: item.code, name });
+      const data = await api(`/api/deep-signals?${q}`);
+      const acc = Number(data.accumulation?.score || 0);
+      const riskPenalty = Number(data.risk?.penalty || 0);
+      const qtm = item.quarterlyMetrics || {};
+      const price1y = Number(data.technical?.price1yChangePct);
+      const divergenceBonus = fundamentalPriceDivergenceBonus(qtm, price1y);
+      const adjustedValue = Math.max(0, Math.min(100, Number(item.valueScore || 0) + divergenceBonus));
+      const deepBase = Number(item.qualityScore || 0) * 0.40 + adjustedValue * 0.40 + acc * 0.20;
+      item.valueScore = roundClient(adjustedValue, 1);
+      item.accumulationScore = roundClient(acc, 1);
+      item.accumulation = data.accumulation || null;
+      item.supply = data.supply || null;
+      item.price1yChangePct = Number.isFinite(price1y) ? roundClient(price1y, 1) : null;
+      item.fundamentalPriceDivergenceBonus = divergenceBonus;
+      item.risk = data.risk || null;
+      item.riskPenalty = riskPenalty;
+      item.baseFinalScore = roundClient(Math.max(0, Math.min(100, deepBase - riskPenalty)), 1);
+      item.finalScore = item.baseFinalScore;
+      item.finalGrade = gradeFromScoreClient(item.finalScore);
+      item.grade = item.finalGrade;
+      item.score = item.finalScore;
+      sectorState.rankings.set(item.code, item);
+    } catch (_) {
+      // Deep 검증 실패 시 1단계 점수는 유지합니다.
+    }
+    renderMembers();
+    await sleep(460);
+  }
+
+  // 3단계: 증권사 목표가는 상위 후보의 보조자료로만 최대 +2점 적용합니다.
+  const topForOpinion = [...sectorState.rankings.values()]
+    .filter((x) => Number.isFinite(Number(x.finalScore)))
+    .sort((a, b) => b.finalScore - a.finalScore)
+    .slice(0, 6);
   for (let i = 0; i < topForOpinion.length; i++) {
     const item = topForOpinion[i];
+    const pct = 90 + Math.round(((i + 1) / Math.max(1, topForOpinion.length)) * 9);
+    setRankProgress(`3단계 · 증권사 목표가 보조검증`, true, pct, `${i + 1}/${topForOpinion.length}`);
     try {
-      setRankProgress(`최종 보조검증 ${i + 1}/${topForOpinion.length} · ${item.code} 증권사 목표가 확인 중`, true);
       const data = await api(`/api/target-opinion?code=${encodeURIComponent(item.code)}`);
       if (data.latest?.targetPrice && Number(item.valuation?.price) > 0) {
         const upsidePct = ((Number(data.latest.targetPrice) - Number(item.valuation.price)) / Number(item.valuation.price)) * 100;
-        const bonus = targetPriceBonus(upsidePct);
+        const bonus = Math.min(2, targetPriceBonus(upsidePct) * 0.5);
         item.analystTarget = { ...data.latest, upsidePct: roundClient(upsidePct, 1), bonus };
         item.finalScore = roundClient(Math.min(100, Number(item.baseFinalScore || item.finalScore) + bonus), 1);
         item.finalGrade = gradeFromScoreClient(item.finalScore);
         sectorState.rankings.set(item.code, item);
       }
-    } catch (_) {
-      // 목표가 데이터가 없어도 핵심 점수에는 영향이 없습니다.
-    }
-    await sleep(480);
+    } catch (_) {}
+    await sleep(420);
   }
 
   const finalItems = [...sectorState.rankings.values()];
   const strong = finalItems.filter((r) => Number(r.finalScore) >= 75 && Number(r.qualityScore) >= 65).length;
-  const bargains = finalItems.filter((r) => Number(r.fairValue?.discountPct) >= 15 && Number(r.qualityScore) >= 65).length;
-  setRankProgress(`분석 완료 · ${completed}개 분석${errors ? ` · ${errors}개 오류` : ""} · FF 75점 이상 ${strong}개 · Quality 65+ & 참고 적정가 15% 이상 할인 ${bargains}개`, true);
+  const consistent = finalItems.filter((r) => r.quarterlyMetrics?.testPass === true && Number(r.quarterlyMetrics?.ttmRevenueGrowth) > 0 && Number(r.quarterlyMetrics?.ttmOperatingGrowth) > 0).length;
+  const accum = finalItems.filter((r) => Number(r.accumulationScore) >= 68).length;
+  setRankProgress(`분석 완료 · FF 75점 이상 ${strong}개 · 최근 4분기 검증 통과 ${consistent}개 · 매집 우위 ${accum}개${errors ? ` · 원자료 오류 ${errors}개` : ""}`, true, 100, "완료");
   renderMembers();
   btn.disabled = false;
+  prepareLooperaAdvice();
+}
+
+// -----------------------------------------------------------------------------
+// v1.0 · Loopera's Advice — public methodology inspired, independent implementation
+// -----------------------------------------------------------------------------
+function resetLooperaSection() {
+  looperaState.items.clear();
+  looperaState.running = false;
+  looperaState.lastSectorId = null;
+  looperaSection?.classList.add("hidden");
+  looperaProgress?.classList.add("hidden");
+  looperaOverview?.classList.add("hidden");
+  looperaAdviceGrid?.classList.add("hidden");
+  researchMemoryPanel?.classList.add("hidden");
+  if (runLooperaAdviceButton) {
+    runLooperaAdviceButton.disabled = true;
+    runLooperaAdviceButton.textContent = "Evidence Gate 실행";
+  }
+  if (looperaReady) {
+    looperaReady.classList.remove("hidden");
+    looperaReady.innerHTML = `<div class="loopera-orbit"><span></span><i></i><b>FF</b></div><div><b>STEP 2 분석을 마치면 상위 후보를 연구계약으로 변환합니다.</b><span>분기 지속성 · 실적-가격 괴리 · 외국인/기관 매집 · DART 공시 · 현금흐름 품질을 서로 독립된 증거로 확인합니다.</span></div>`;
+  }
+}
+
+function prepareLooperaAdvice() {
+  if (!sectorState.selected) return;
+  const candidates = looperaCandidates();
+  looperaSection?.classList.remove("hidden");
+  looperaState.lastSectorId = sectorState.selected.id;
+  if (runLooperaAdviceButton) runLooperaAdviceButton.disabled = candidates.length === 0;
+  if (looperaReady) {
+    looperaReady.classList.remove("hidden");
+    looperaReady.innerHTML = candidates.length
+      ? `<div class="loopera-orbit"><span></span><i></i><b>${candidates.length}</b></div><div><b>FF 상위 ${candidates.length}개 후보가 Evidence Gate를 기다리고 있습니다.</b><span>STEP 2 점수를 그대로 믿지 않고 가설·반대가설·회계 원문·Train→Test 안정성·독립 증거를 순서대로 확인합니다.</span></div>`
+      : `<div class="loopera-orbit"><span></span><i></i><b>?</b></div><div><b>검증 가능한 후보가 충분하지 않습니다.</b><span>STEP 2의 저평가 우량주 분석 결과를 먼저 확인해주세요.</span></div>`;
+  }
+  renderResearchMemory();
+}
+
+function looperaCandidates(limit = 8) {
+  return [...sectorState.rankings.values()]
+    .filter((item) => /^\d{6}$/.test(String(item.code || "")) && Number.isFinite(Number(item.finalScore)))
+    .sort((a, b) => Number(b.finalScore) - Number(a.finalScore))
+    .slice(0, limit);
+}
+
+function buildLooperaPeerContext(items) {
+  const values = (key) => (items || []).map((x) => Number(x?.[key])).filter(Number.isFinite);
+  const trend = sectorState.selected ? sectorState.trends.get(sectorState.selected.id) : null;
+  return {
+    qualityMedian: medianClient(values("qualityScore")),
+    valueMedian: medianClient(values("valueScore")),
+    accumulationMedian: medianClient(values("accumulationScore")),
+    finalMedian: medianClient(values("finalScore")),
+    sectorTrendScore: Number.isFinite(Number(trend?.score)) ? Number(trend.score) : null,
+    candidateCount: items.length,
+  };
+}
+
+function compactLooperaCandidate(item) {
+  const risk = item?.risk || null;
+  return {
+    code: item.code,
+    qualityScore: item.qualityScore,
+    valueScore: item.valueScore,
+    finalScore: item.finalScore,
+    accumulationScore: item.accumulationScore,
+    revenueCagr: item.revenueCagr,
+    operatingCagr: item.operatingCagr,
+    debtRatio: item.debtRatio,
+    reserveRatio: item.reserveRatio,
+    roe: item.roe,
+    operatingMargin: item.operatingMargin,
+    price1yChangePct: item.price1yChangePct,
+    riskPenalty: item.riskPenalty,
+    risk: risk ? {
+      penalty: risk.penalty,
+      disclosure: risk.disclosure ? { penalty: risk.disclosure.penalty, items: (risk.disclosure.items || []).slice(0, 8) } : null,
+      news: risk.news ? { penalty: risk.news.penalty, headlines: (risk.news.headlines || []).slice(0, 5) } : null,
+    } : null,
+    annual: (item.annual || []).slice(0, 4),
+    quarterly: (item.quarterly || []).slice(0, 12),
+    quarterlyMetrics: item.quarterlyMetrics || null,
+    valuation: item.valuation || null,
+    fairValue: item.fairValue || null,
+    valueTrapWarnings: item.valueTrapWarnings || [],
+    accumulation: item.accumulation || null,
+    supply: item.supply ? {
+      score: item.supply.score,
+      foreign: item.supply.foreign,
+      institution: item.supply.institution,
+      joint: item.supply.joint,
+    } : null,
+  };
+}
+
+async function runLooperaAdviceScan() {
+  if (looperaState.running || !sectorState.selected) return;
+  const candidates = looperaCandidates(8);
+  if (!candidates.length) return;
+
+  looperaState.running = true;
+  looperaState.items.clear();
+  runLooperaAdviceButton.disabled = true;
+  runLooperaAdviceButton.textContent = "검증 중…";
+  looperaReady?.classList.add("hidden");
+  looperaOverview?.classList.add("hidden");
+  looperaAdviceGrid?.classList.remove("hidden");
+  looperaAdviceGrid.innerHTML = `<div class="loopera-empty">상위 후보를 Evidence Gate로 보내는 중입니다.</div>`;
+  const allRanked = [...sectorState.rankings.values()].filter((x) => Number.isFinite(Number(x.finalScore)));
+  const peerContext = buildLooperaPeerContext(allRanked);
+  const trend = sectorState.trends.get(sectorState.selected.id) || null;
+  let failures = 0;
+
+  setLooperaProgress(4, "Context 고정", `${candidates.length}개 후보 · STEP 2 결과를 변경하지 않고 연구 입력으로 동결합니다.`);
+  await sleep(180);
+
+  for (let i = 0; i < candidates.length; i++) {
+    const item = candidates[i];
+    const member = sectorState.members.find((m) => m.code === item.code) || { code: item.code, name: item.code, market: sectorState.selected.market };
+    const startPct = 8 + Math.round((i / Math.max(1, candidates.length)) * 84);
+    setLooperaProgress(startPct, `${i + 1}/${candidates.length} · ${member.name}`, "Hypothesis → DART Accounting → Robustness → 독립 증거 순으로 반증합니다.");
+    try {
+      const data = await apiPost("/api/loopera-advice", {
+        candidate: compactLooperaCandidate(item),
+        member: { code: member.code, name: member.name, englishName: member.englishName || member.nameEn || "", market: member.market || "" },
+        sector: { id: sectorState.selected.id, code: sectorState.selected.code, name: sectorState.selected.name, market: sectorState.selected.market, trend },
+        peerContext,
+      });
+      const row = { ...(data.advice || {}), accounting: data.accounting || null, methodology: data.methodology || null, member };
+      const previous = priorResearchMemory(row.code, row.sector || sectorState.selected?.name || "");
+      if (previous) row.memoryComparison = { priorScore: Number(previous.score || 0), priorDecision: previous.decision || "", priorDate: previous.generatedAt || null, delta: roundClient(Number(row.score || 0) - Number(previous.score || 0), 1) };
+      looperaState.items.set(item.code, row);
+      saveResearchMemory(row);
+    } catch (error) {
+      failures += 1;
+      looperaState.items.set(item.code, {
+        code: item.code,
+        name: member.name,
+        market: member.market || "",
+        score: 0,
+        decision: "검증 오류",
+        hypothesis: { title: "Evidence Gate 실행 실패", mechanism: error.message },
+        gates: [], supportEvidence: [], counterEvidence: [error.message], member,
+      });
+    }
+    renderLooperaAdvice();
+    const donePct = 8 + Math.round(((i + 1) / Math.max(1, candidates.length)) * 84);
+    setLooperaProgress(donePct, `${member.name} 검증 완료`, `${i + 1}/${candidates.length}${failures ? ` · 오류 ${failures}` : ""}`);
+    await sleep(240);
+  }
+
+  setLooperaProgress(97, "Research Memory 업데이트", "같은 후보를 다음 검토에서 비교할 수 있도록 브라우저 연구기록을 갱신합니다.");
+  renderResearchMemory();
+  await sleep(220);
+  setLooperaProgress(100, "Evidence Gate 완료", `${looperaState.items.size - failures}개 검증 완료${failures ? ` · ${failures}개 오류` : ""}`);
+  renderLooperaAdvice();
+  looperaState.running = false;
+  runLooperaAdviceButton.disabled = false;
+  runLooperaAdviceButton.textContent = "Evidence Gate 다시 실행";
+}
+
+function setLooperaProgress(percent, title, detail = "") {
+  const pct = Math.max(0, Math.min(100, Number(percent) || 0));
+  looperaProgress?.classList.remove("hidden");
+  if ($("looperaProgressTitle")) $("looperaProgressTitle").textContent = title || "Evidence Gate";
+  if ($("looperaProgressDetail")) $("looperaProgressDetail").textContent = detail || "";
+  if ($("looperaProgressPct")) $("looperaProgressPct").textContent = `${Math.round(pct)}%`;
+  if ($("looperaEnergyBar")) $("looperaEnergyBar").style.width = `${pct}%`;
+}
+
+function renderLooperaAdvice() {
+  if (!looperaAdviceGrid || !looperaOverview) return;
+  const rows = [...looperaState.items.values()].sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+  if (!rows.length) {
+    looperaAdviceGrid.classList.remove("hidden");
+    looperaAdviceGrid.innerHTML = `<div class="loopera-empty">아직 Evidence Gate 결과가 없습니다.</div>`;
+    return;
+  }
+  const priority = rows.filter((x) => x.decision === "우선 검토").length;
+  const verify = rows.filter((x) => x.decision === "추가 검증").length;
+  const hold = rows.filter((x) => x.decision === "보류" || x.criticalRisk).length;
+  const avg = rows.reduce((a, b) => a + Number(b.score || 0), 0) / rows.length;
+  looperaOverview.classList.remove("hidden");
+  looperaOverview.innerHTML = `
+    <div><small>검증 후보</small><b>${rows.length}</b><span>STEP 2 상위 후보</span></div>
+    <div><small>우선 검토</small><b>${priority}</b><span>Evidence Gate 82+</span></div>
+    <div><small>추가 검증</small><b>${verify}</b><span>Evidence Gate 72+</span></div>
+    <div><small>평균 Evidence</small><b>${fmt1(avg)}</b><span>공시·회계 반증 후 점수</span></div>`;
+  looperaAdviceGrid.classList.remove("hidden");
+  looperaAdviceGrid.innerHTML = rows.map((row, index) => looperaAdviceCardHtml(row, index + 1)).join("");
+}
+
+function looperaAdviceCardHtml(row, rank) {
+  const decisionClass = row.decision === "우선 검토" ? "priority" : row.decision === "보류" || row.criticalRisk ? "stop" : "";
+  const gates = (row.gates || []).map((g) => `<div class="evidence-gate ${escapeHtml(g.status || "watch")}" title="${escapeHtml(g.reason || "")}"><small>${escapeHtml(g.name || g.key || "Gate")}</small><b>${fmt1(g.score)}/100</b></div>`).join("");
+  const support = (row.supportEvidence || []).slice(0, 5);
+  const counter = (row.counterEvidence || []).slice(0, 5);
+  const contract = row.researchContract || {};
+  const accounting = row.accountingSummary || {};
+  const member = row.member || {};
+  const failText = (contract.failureConditions || []).slice(0, 4).join(" · ") || "다음 분기 실적·수급·공시 변화에서 가설 무효화 조건을 다시 확인";
+  const competingText = (contract.competingMechanisms || []).slice(0, 3).join(" · ") || "대안 설명 자료 부족";
+  const accountingTags = [
+    accounting.reportLabel ? `DART ${accounting.reportLabel}` : null,
+    Number.isFinite(Number(accounting.cashConversionOperating)) ? `CFO/영업익 ${fmt2(accounting.cashConversionOperating)}x` : null,
+    Number.isFinite(Number(accounting.cashConversionNet)) ? `CFO/순익 ${fmt2(accounting.cashConversionNet)}x` : null,
+    row.memoryComparison ? `이전검증 ${fmt1(row.memoryComparison.priorScore)} → ${fmt1(row.score)} (${row.memoryComparison.delta > 0 ? "+" : ""}${fmt1(row.memoryComparison.delta)})` : null,
+  ].filter(Boolean);
+  return `
+    <article class="advice-card ${decisionClass}">
+      <div class="advice-card-top">
+        <span class="advice-rank">${rank}</span>
+        <div class="advice-name"><b>${escapeHtml(row.name || member.name || row.code)}</b><small>${escapeHtml(row.code || "")} · ${escapeHtml(row.market || member.market || "국내주식")}</small></div>
+        <div class="advice-score"><strong>${fmt1(row.score)}</strong><span class="${decisionClass}">${escapeHtml(row.decision || "관찰")}</span></div>
+      </div>
+      <div class="hypothesis-box"><small>PRIMARY HYPOTHESIS</small><b>${escapeHtml(row.hypothesis?.title || "가설 미정")}</b><p>${escapeHtml(row.hypothesis?.mechanism || "")}</p></div>
+      <div class="evidence-gates">${gates || `<div class="evidence-gate watch"><small>Gate</small><b>자료부족</b></div>`}</div>
+      ${accountingTags.length ? `<div class="accounting-line">${accountingTags.map((x) => `<span>${escapeHtml(x)}</span>`).join("")}</div>` : ""}
+      <div class="evidence-columns">
+        <div class="evidence-list good-evidence"><b>✓ 지지 증거</b><ul>${support.length ? support.map((x) => `<li>${escapeHtml(x)}</li>`).join("") : "<li>충분한 지지 증거 없음</li>"}</ul></div>
+        <div class="evidence-list bad-evidence"><b>↯ 반대 증거</b><ul>${counter.length ? counter.map((x) => `<li>${escapeHtml(x)}</li>`).join("") : "<li>중대한 반대 증거 미감지</li>"}</ul></div>
+      </div>
+      <details class="research-contract"><summary>Research Contract · 반증조건 보기</summary><div class="research-contract-body">
+        <div class="contract-row"><span>현상</span><b>${escapeHtml(contract.phenomenon || row.hypothesis?.title || "-")}</b></div>
+        <div class="contract-row"><span>대안 설명</span><b>${escapeHtml(competingText)}</b></div>
+        <div class="contract-row"><span>무효화 조건</span><b>${escapeHtml(failText)}</b></div>
+        <div class="contract-row"><span>성과 한계</span><b>IC·Sharpe·MDD·독립 OOS는 실제 과거 패널 walk-forward 구축 전에는 표시하지 않음</b></div>
+      </div></details>
+      <div class="advice-actions">
+        <button type="button" data-loopera-select="${escapeHtml(row.code)}" data-stock-name="${escapeHtml(row.name || member.name || row.code)}" data-stock-market="${escapeHtml(row.market || member.market || "")}">STEP 4 상세검증</button>
+        <a href="${npayUrl(row.code)}" target="_blank" rel="noopener noreferrer">Npay 차트 ↗</a>
+      </div>
+    </article>`;
+}
+
+function loadResearchMemory() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(RESEARCH_MEMORY_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+function priorResearchMemory(code, sector = "") {
+  return loadResearchMemory().find((x) => x.code === code && (!sector || x.sector === sector)) || null;
+}
+
+function saveResearchMemory(row) {
+  if (!row?.code || row.decision === "검증 오류") return;
+  const memory = loadResearchMemory();
+  const record = {
+    code: row.code,
+    name: row.name || row.code,
+    sector: row.sector || sectorState.selected?.name || "",
+    score: Number(row.score || 0),
+    decision: row.decision || "관찰",
+    hypothesis: row.hypothesis?.title || "",
+    generatedAt: new Date().toISOString(),
+    evidenceVersion: "v1.0",
+  };
+  const next = [record, ...memory.filter((x) => !(x.code === record.code && x.sector === record.sector))].slice(0, 30);
+  try { localStorage.setItem(RESEARCH_MEMORY_KEY, JSON.stringify(next)); } catch {}
+}
+
+function renderResearchMemory() {
+  if (!researchMemoryPanel || !researchMemoryList) return;
+  const memory = loadResearchMemory();
+  researchMemoryPanel.classList.toggle("hidden", memory.length === 0);
+  if (!memory.length) { researchMemoryList.innerHTML = ""; return; }
+  researchMemoryList.innerHTML = memory.slice(0, 12).map((item) => `
+    <div class="memory-item">
+      <span class="memory-score">${fmt1(item.score)}</span>
+      <div><b>${escapeHtml(item.name || item.code)} · ${escapeHtml(item.hypothesis || "Evidence Gate")}</b><small>${escapeHtml(item.sector || "")} · ${formatDateTime(item.generatedAt)}</small></div>
+      <span>${escapeHtml(item.decision || "관찰")}</span>
+    </div>`).join("");
+}
+
+
+function fundamentalPriceDivergenceBonus(qtm, price1y) {
+  if (!qtm || !Number.isFinite(Number(price1y))) return 0;
+  const rev = Number(qtm.ttmRevenueGrowth);
+  const op = Number(qtm.ttmOperatingGrowth);
+  if (!(rev > 0) || !(op > 0) || Number(price1y) >= 0) return 0;
+  const growthStrength = Math.min(1, (Math.max(0, rev) + Math.max(0, op)) / 50);
+  const priceGap = Math.min(1, Math.abs(Number(price1y)) / 30);
+  const consistency = qtm.testPass === true ? 1 : 0.55;
+  return roundClient(10 * growthStrength * priceGap * consistency, 1);
 }
 
 function selectDiverseCandidates(members, limit = 72) {
@@ -813,16 +1196,48 @@ function drawSectorChart(canvas, rows) {
   drawLineChart(canvas, rows, series, { xKey: "date", valueFormatter: shortNumber, zeroLine: false });
 }
 
-function setSectorProgress(text, visible) {
-  if (!sectorProgress) return;
-  sectorProgress.textContent = text || "";
-  sectorProgress.classList.toggle("hidden", !visible || !text);
+function setSectorProgress(text, visible, percent = null, detail = "") {
+  renderProgressNote(sectorProgress, text, visible, percent, detail);
 }
 
-function setRankProgress(text, visible) {
-  if (!rankProgress) return;
-  rankProgress.textContent = text || "";
-  rankProgress.classList.toggle("hidden", !visible || !text);
+function setRankProgress(text, visible, percent = null, detail = "") {
+  renderProgressNote(rankProgress, text, visible, percent, detail);
+}
+
+function renderProgressNote(el, text, visible, percent = null, detail = "") {
+  if (!el) return;
+  el.classList.toggle("hidden", !visible || !text);
+  if (!visible || !text) { el.innerHTML = ""; return; }
+  const n = Number(percent);
+  if (!Number.isFinite(n)) { el.textContent = text; return; }
+  const pct = Math.max(0, Math.min(100, n));
+  el.innerHTML = `<div class="energy-progress-head"><b>${escapeHtml(text)}</b><span>${escapeHtml(detail || `${Math.round(pct)}%`)}</span></div><div class="energy-track"><i style="width:${pct}%"></i><span class="energy-glow" style="left:${Math.max(0,pct-2)}%"></span></div><div class="energy-percent"><strong>${Math.round(pct)}%</strong><small>${pct >= 100 ? "분석 완료" : "데이터를 채우는 중입니다"}</small></div>`;
+}
+
+
+function startAnalyzeEnergy() {
+  clearInterval(analyzeProgressTimer);
+  let pct = 4;
+  updateAnalyzeEnergy(pct);
+  analyzeProgressTimer = setInterval(() => {
+    const step = pct < 45 ? 4 + Math.random() * 5 : pct < 78 ? 2 + Math.random() * 3 : 0.5 + Math.random() * 1.5;
+    pct = Math.min(93, pct + step);
+    updateAnalyzeEnergy(pct);
+  }, 420);
+}
+
+function finishAnalyzeEnergy() {
+  clearInterval(analyzeProgressTimer);
+  analyzeProgressTimer = null;
+  updateAnalyzeEnergy(100);
+}
+
+function updateAnalyzeEnergy(percent) {
+  const bar = $("analyzeEnergyBar");
+  const label = $("analyzeEnergyPct");
+  const pct = Math.max(0, Math.min(100, Number(percent) || 0));
+  if (bar) bar.style.width = `${pct}%`;
+  if (label) label.textContent = `${Math.round(pct)}%`;
 }
 
 function updateNpayTopLink(code) {
@@ -951,6 +1366,7 @@ $("analyze").addEventListener("click", async () => {
 
   loading.classList.remove("hidden");
   result.classList.add("hidden");
+  startAnalyzeEnergy();
   try {
     const q = new URLSearchParams({ code });
     if (corp) q.set("corp", corp);
@@ -966,6 +1382,8 @@ $("analyze").addEventListener("click", async () => {
       </div>`;
     result.classList.remove("hidden");
   } finally {
+    finishAnalyzeEnergy();
+    await sleep(260);
     loading.classList.add("hidden");
   }
 });
@@ -1020,6 +1438,10 @@ function renderResult(d) {
         <div class="kv">
           <span>Quality</span><span>${fmt1(rankCtx.qualityScore)}/100</span>
           <span>Value</span><span>${fmt1(rankCtx.valueScore)}/100</span>
+          <span>분기 검증</span><span class="${rankCtx.quarterlyMetrics?.testPass === true ? "pos" : rankCtx.quarterlyMetrics?.testPass === false ? "neg" : "neutral"}">${rankCtx.quarterlyMetrics?.testPass === true ? "최근 4분기 통과" : rankCtx.quarterlyMetrics?.testPass === false ? "미통과" : "자료부족"}</span>
+          <span>TTM 매출/영업익</span><span>${rankCtx.quarterlyMetrics?.ttmRevenueGrowth == null ? "-" : signedPctPlain(rankCtx.quarterlyMetrics.ttmRevenueGrowth)} / ${rankCtx.quarterlyMetrics?.ttmOperatingGrowth == null ? "-" : signedPctPlain(rankCtx.quarterlyMetrics.ttmOperatingGrowth)}</span>
+          <span>매집 점수</span><span>${rankCtx.accumulationScore == null ? "-" : `${fmt1(rankCtx.accumulationScore)}/100`}</span>
+          <span>공시·뉴스 페널티</span><span class="${Number(rankCtx.riskPenalty) > 0 ? "neg" : "pos"}">${rankCtx.riskPenalty == null ? "-" : `-${fmt1(rankCtx.riskPenalty)}점`}</span>
           <span>FF 참고 적정가</span><span>${rankCtx.fairValue?.fairPrice ? `${fmt(rankCtx.fairValue.fairPrice)}원` : "-"}</span>
           <span>현재가 대비</span><span class="${Number(rankCtx.fairValue?.discountPct) > 0 ? "pos" : "neg"}">${rankCtx.fairValue?.discountPct == null ? "-" : `${signedPctPlain(rankCtx.fairValue.discountPct)}`}</span>
         </div>
@@ -1101,6 +1523,7 @@ function renderResult(d) {
       ${companyAccordion(identity, snap)}
       ${priceAccordion(t)}
       ${supplyAccordion(s)}
+      ${rankingSignalsAccordion(rankCtx)}
       ${annualAccordion(f.annual || [])}
       ${quarterAccordion(f.quarterly || [], f.note)}
       ${ratioAccordion(f.ratios || [], latestRatio)}
@@ -1185,6 +1608,33 @@ function supplyAccordion(s) {
           </table>
         </div>
         <div class="note">기관은 이 API에서 실제 보유주식수 시계열을 직접 제공하지 않아 <b>누적 순매수와 순매수 지속성</b>을 보유 확대의 대용지표로 사용합니다. 외국인은 보유비율 변화도 별도로 가점합니다.</div>
+      </div>
+    </details>`;
+}
+
+
+function rankingSignalsAccordion(rankCtx) {
+  if (!rankCtx) return "";
+  const q = rankCtx.quarterlyMetrics || {};
+  const acc = rankCtx.accumulation || {};
+  const risk = rankCtx.risk || {};
+  const disclosureItems = risk.disclosure?.items || [];
+  const newsItems = risk.news?.headlines || [];
+  return `
+    <details class="accordion" id="acc-ff-signals">
+      <summary><span>FF 핵심 검증 · 분기 일관성 · 매집 · 리스크</span><span class="accordion-meta">점수의 근거 확인</span></summary>
+      <div class="accordion-body">
+        <div class="ratio-grid">
+          <div class="ratio-card"><div class="label">분기 Train/Test</div><div class="value ${q.testPass === true ? "good" : q.testPass === false ? "bad" : "neutral"}">${q.testPass === true ? "통과" : q.testPass === false ? "미통과" : "자료부족"}</div><div class="hint">과거 구간과 최근 4분기를 분리해 성장 지속성을 확인</div></div>
+          <div class="ratio-card"><div class="label">TTM 매출 성장</div><div class="value ${signClass(q.ttmRevenueGrowth)}">${q.ttmRevenueGrowth == null ? "-" : signedPctPlain(q.ttmRevenueGrowth)}</div><div class="hint">최근 4분기 합계 vs 직전 4분기 합계</div></div>
+          <div class="ratio-card"><div class="label">TTM 영업이익 성장</div><div class="value ${signClass(q.ttmOperatingGrowth)}">${q.ttmOperatingGrowth == null ? "-" : signedPctPlain(q.ttmOperatingGrowth)}</div><div class="hint">한 분기 급증보다 4분기 누적 개선을 우대</div></div>
+          <div class="ratio-card"><div class="label">매집 점수</div><div class="value ${Number(rankCtx.accumulationScore) >= 68 ? "good" : "neutral"}">${rankCtx.accumulationScore == null ? "-" : `${fmt1(rankCtx.accumulationScore)}/100`}</div><div class="hint">외국인·기관 지속매수 + 거래량 + 가격 조합</div></div>
+          <div class="ratio-card"><div class="label">1년 주가</div><div class="value ${Number(rankCtx.price1yChangePct) < 0 && Number(q.ttmRevenueGrowth) > 0 ? "good" : signClass(rankCtx.price1yChangePct)}">${rankCtx.price1yChangePct == null ? "-" : signedPctPlain(rankCtx.price1yChangePct)}</div><div class="hint">실적 개선인데 주가가 전년보다 낮으면 괴리 가점</div></div>
+          <div class="ratio-card"><div class="label">공시·뉴스 위험</div><div class="value ${Number(rankCtx.riskPenalty) > 0 ? "bad" : "good"}">${rankCtx.riskPenalty == null ? "-" : `-${fmt1(rankCtx.riskPenalty)}점`}</div><div class="hint">DART를 우선하고 뉴스는 낮은 가중치의 보조신호</div></div>
+        </div>
+        ${acc.signals?.length ? `<div class="note"><b>매집 후보 신호</b><br>${acc.signals.map(x=>`• ${escapeHtml(x)}`).join("<br>")}${acc.penalties?.length ? `<br><br><b>분배 경고</b><br>${acc.penalties.map(x=>`• ${escapeHtml(x)}`).join("<br>")}` : ""}</div>` : ""}
+        ${disclosureItems.length ? `<div class="table-wrap table-gap"><table><thead><tr><th>공시일</th><th>위험 공시</th><th>감점</th></tr></thead><tbody>${disclosureItems.map(x=>`<tr><td>${formatDate(x.date)}</td><td>${escapeHtml(x.title)}</td><td class="neg">-${fmt1(x.weight)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="note">최근 1년 DART 위험공시: ${escapeHtml(risk.disclosure?.message || "상위 후보에서 자동 확인")}</div>`}
+        ${newsItems.length ? `<div class="note"><b>뉴스 위험 키워드 보조검색</b><br>${newsItems.slice(0,5).map(x=>`• ${escapeHtml(x.title)}`).join("<br>")}<br><small>뉴스 제목 기반 신호는 오탐 가능성이 있어 공시보다 낮은 가중치를 적용합니다.</small></div>` : ""}
       </div>
     </details>`;
 }

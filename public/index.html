@@ -20,7 +20,7 @@
       </a>
       <div class="topbar-actions">
         <span class="live-badge"><i></i> KIS 기반</span>
-        <a class="ghost-link" href="#step3">기업 검색</a>
+        <a class="ghost-link" href="#step4">기업 검색</a>
         <a class="ghost-link" href="#diagnostics">API 상태</a>
       </div>
     </nav>
@@ -32,12 +32,12 @@
         <p>상승하는 산업을 찾고 → 그 안에서 매출이 꾸준히 늘고 안정적인 기업을 고른 뒤 → 외국인·기관 수급과 가격을 검증합니다.</p>
         <div class="hero-actions">
           <a class="cta primary-cta" href="#step1">상승 산업 찾기 <span>→</span></a>
-          <a class="cta secondary-cta" href="#step3">기업명으로 바로 검색</a>
+          <a class="cta secondary-cta" href="#step4">기업명으로 바로 검색</a>
         </div>
         <div class="hero-trust">
           <span>자동매수·매도 없음</span>
           <span>기업 선별 보조도구</span>
-          <span>v0.8</span>
+          <span>v1.0</span>
         </div>
       </div>
 
@@ -70,10 +70,11 @@
       </div>
     </header>
 
-    <section class="guide-grid" aria-label="사용 순서">
+    <section class="guide-grid four" aria-label="사용 순서">
       <div class="guide-block"><span class="guide-no">01</span><div><b>산업 찾기</b><small>정배열과 20·60·120일 흐름</small></div><i>↗</i></div>
-      <div class="guide-block"><span class="guide-no">02</span><div><b>기업 고르기</b><small>3년 매출·영업이익·안정성</small></div><i>↗</i></div>
-      <div class="guide-block"><span class="guide-no">03</span><div><b>최종 검증</b><small>수급·가격·Npay 증권 차트</small></div><i>✓</i></div>
+      <div class="guide-block"><span class="guide-no">02</span><div><b>기업 고르기</b><small>분기 실적 · Value · 매집</small></div><i>↗</i></div>
+      <div class="guide-block loopera-guide"><span class="guide-no">03</span><div><b>Loopera's Advice</b><small>가설 → Evidence Gates → 반증</small></div><i>↗</i></div>
+      <div class="guide-block"><span class="guide-no">04</span><div><b>선택 기업 검증</b><small>수급·재무·가격·Npay 차트</small></div><i>✓</i></div>
     </section>
 
     <details class="access-drawer">
@@ -167,13 +168,54 @@
       <div id="memberGrid" class="company-grid"></div>
       <div class="method-card">
         <div class="method-icon">FF</div>
-        <div><b>FF 저평가 우량점수</b><p><b>Quality 45%</b>: 매출·영업이익 추세, 부채비율, 유보율, ROE, 영업이익률 · <b>Value 55%</b>: 적정가 대비 할인, 52주 저가 위치, 섹터 상대 PER·PBR, PBR/ROE, 이익수익률. 증권사 목표가는 최대 +4점 보조가점만 적용합니다.</p></div>
+        <div><b>FF 저평가 우량점수 v1.0 · Evidence Gate 준비</b><p><b>분기 실적을 최우선</b>으로 최근 4분기 매출·영업이익률이 꾸준히 개선되는지, 과거 구간에서도 같은 흐름이 반복됐는지 Train/Test 방식으로 검증합니다. 최종 상위후보는 <b>Quality 40% + Value 40% + 외국인·기관/거래량 매집 20% - DART·뉴스 위험감점</b>으로 재평가합니다. 실적은 좋아지는데 1년 주가가 낮아진 기업은 가치괴리 가점을 줍니다.</p></div>
       </div>
     </section>
 
-    <section class="step-section stock-detail-panel" id="step3">
+
+    <section class="step-section loopera-section hidden" id="step3">
+      <div class="step-heading loopera-heading">
+        <div class="step-number loopera-step-number">STEP 3</div>
+        <div>
+          <div class="loopera-title-row"><h2>Loopera's Advice</h2><span class="research-badge">EVIDENCE-GATED</span></div>
+          <p>Loopera의 공개 연구 원칙인 <b>Hypothesis-driven · Evidence-gated · Research Memory</b>를 참고해, FF 상위후보를 한 번 더 반증 중심으로 검증합니다.</p>
+          <small class="loopera-disclaimer">독립 구현입니다. Loopera 소스코드·비공개 파라미터를 사용하지 않으며, IC/Sharpe/MDD는 실제 과거 패널 백테스트가 구축되기 전까지 생성하지 않습니다.</small>
+        </div>
+        <button id="runLooperaAdvice" class="loopera-button" disabled>Evidence Gate 실행</button>
+      </div>
+
+      <div id="looperaReady" class="loopera-ready">
+        <div class="loopera-orbit"><span></span><i></i><b>FF</b></div>
+        <div><b>STEP 2 분석을 마치면 상위 후보를 연구계약으로 변환합니다.</b><span>분기 지속성 · 실적-가격 괴리 · 외국인/기관 매집 · DART 공시 · 현금흐름 품질을 서로 독립된 증거로 확인합니다.</span></div>
+      </div>
+
+      <div id="looperaProgress" class="loopera-progress hidden">
+        <div class="loopera-progress-top"><div><b id="looperaProgressTitle">Evidence Gate 준비 중</b><small id="looperaProgressDetail">상위 후보를 구조화하는 중입니다.</small></div><strong id="looperaProgressPct">0%</strong></div>
+        <div class="loopera-energy"><i id="looperaEnergyBar"></i></div>
+        <div class="gate-pipeline" aria-label="Loopera 스타일 Evidence Gates">
+          <span>Context</span><i>→</i><span>Hypothesis</span><i>→</i><span>Accounting</span><i>→</i><span>Robustness</span><i>→</i><span>Incremental</span><i>→</i><span>Memory</span>
+        </div>
+      </div>
+
+      <div id="looperaOverview" class="loopera-overview hidden"></div>
+      <div id="looperaAdviceGrid" class="loopera-advice-grid hidden"></div>
+
+      <details id="researchMemoryPanel" class="research-memory hidden">
+        <summary><span><b>Research Memory</b><small>이 브라우저에서 이전 Evidence Gate 결과를 기억합니다.</small></span><i>+</i></summary>
+        <div class="research-memory-body">
+          <div id="researchMemoryList" class="research-memory-list"></div>
+          <button id="clearResearchMemory" class="soft-button memory-clear" type="button">연구 메모 비우기</button>
+        </div>
+      </details>
+
+      <div class="loopera-method-note">
+        <b>왜 이 단계가 있나요?</b> STEP 2의 높은 점수를 그대로 믿지 않고, <b>“이 회사가 좋아 보이는 다른 설명은 없는가?”</b>를 먼저 묻습니다. 데이터가 부족하거나 한 분기 급증·현금흐름 약화·위험공시가 있으면 점수가 높아도 보류시킵니다.
+      </div>
+    </section>
+
+    <section class="step-section stock-detail-panel" id="step4">
       <div class="step-heading search-step-heading">
-        <div class="step-number">STEP 3</div>
+        <div class="step-number">STEP 4</div>
         <div>
           <h2>선택 기업 검증</h2>
           <p>종목코드를 몰라도 됩니다. <b>회사명만 검색</b>해서 선택하세요.</p>
@@ -217,7 +259,7 @@
         </div>
       </div>
 
-      <div id="loading" class="loading hidden"><span class="spinner"></span><div><b>기업 데이터를 분석하고 있습니다.</b><small>KIS 호출 제한을 피하기 위해 시세 → 수급 → 재무 → 차트를 순서대로 불러옵니다.</small></div></div>
+      <div id="loading" class="loading hidden"><span class="spinner"></span><div class="loading-copy"><b>기업 데이터를 분석하고 있습니다.</b><small>KIS 호출 제한을 피하기 위해 시세 → 수급 → 재무 → 차트를 순서대로 불러옵니다.</small><div class="analyze-energy"><i id="analyzeEnergyBar"></i></div></div><strong id="analyzeEnergyPct" class="analyze-energy-pct">0%</strong></div>
       <div id="result" class="result hidden"></div>
     </section>
 
@@ -241,8 +283,8 @@
     </details>
 
     <footer>
-      <div class="brand footer-brand"><span class="brand-mark">FF</span><span class="brand-copy"><b>Value Hunter</b><small>산업 → 기업 → 수급 → 가격</small></span></div>
-      <p>기업 선별을 돕는 개인용 가치투자 도구 · 자동주문 기능 없음 · 시장 데이터 일부는 KRX 통계정보 활용 · v0.8</p>
+      <div class="brand footer-brand"><span class="brand-mark">FF</span><span class="brand-copy"><b>Value Hunter</b><small>산업 → 기업 → Evidence Gate → 기업 검증</small></span></div>
+      <p>기업 선별을 돕는 개인용 가치투자 도구 · 자동주문 기능 없음 · 시장 데이터 일부는 KRX 통계정보 활용 · v1.0</p>
     </footer>
   </main>
   <script src="/app.js" type="module"></script>

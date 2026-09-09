@@ -2,14 +2,15 @@ const KIS_BASE = "https://openapi.koreainvestment.com:9443";
 const DART_BASE = "https://opendart.fss.or.kr/api";
 const KRX_BASE = "https://data-dbg.krx.co.kr/svc/apis";
 const ECOS_BASE = "https://ecos.bok.or.kr/api";
-const APP_VERSION = "0.8.0";
+const APP_VERSION = "1.0.0";
 const MASTER_BASE = "https://new.real.download.dws.co.kr/common/master";
-const UNIVERSE_CACHE_URL = "https://ff-value-hunter-cache.local/stock-universe-v8";
-const SECTOR_TREND_CACHE_PREFIX = "https://ff-value-hunter-cache.local/sector-trend-v8/";
-const KRX_MARKET_CACHE_URL = "https://ff-value-hunter-cache.local/krx-market-v8";
-const KRX_FAILURE_CACHE_URL = "https://ff-value-hunter-cache.local/krx-failure-v8";
+const UNIVERSE_CACHE_URL = "https://ff-value-hunter-cache.local/stock-universe-v10";
+const SECTOR_TREND_CACHE_PREFIX = "https://ff-value-hunter-cache.local/sector-trend-v10/";
+const KRX_MARKET_CACHE_URL = "https://ff-value-hunter-cache.local/krx-market-v10";
+const KRX_FAILURE_CACHE_URL = "https://ff-value-hunter-cache.local/krx-failure-v10";
 const KIS_MIN_INTERVAL_MS = 450;
 const KIS_TOKEN_CACHE_URL = "https://ff-value-hunter-token-cache.local/kis-access-token-v3";
+const DART_CORP_CACHE_URL = "https://ff-value-hunter-cache.local/dart-corp-map-v10";
 
 const REQUIRED_BINDINGS = [
   "APP_ACCESS_KEY",
@@ -162,7 +163,7 @@ export default {
       if (url.pathname === "/api/sectors") {
         requireEnv(env, ["KIS_APP_KEY", "KIS_APP_SECRET"]);
 
-        // v0.8 기반 유지:
+        // v1.0 기반 유지:
         // KOSPI는 3=산업별구분을 우선 사용합니다. KOSDAQ의 3은 '일반구분'이라
         // 실제 산업 목록이 충분하지 않을 수 있어, 매핑 결과가 적으면 전업종(0)을
         // 다시 받아 '종목 마스터 대분류 코드가 실제로 존재하는 항목'만 남깁니다.
@@ -228,7 +229,7 @@ export default {
             universeCount: universe.length,
             fallbackUsed,
           },
-          note: "v0.8은 실제 상장기업이 1개 이상 정확히 매핑되는 산업 섹터만 화면에 노출합니다. 특수지수/파생지수/구성기업 0개 항목은 자동 제외합니다.",
+          note: "v1.0은 실제 상장기업이 1개 이상 정확히 매핑되는 산업 섹터만 화면에 노출합니다. 특수지수/파생지수/구성기업 0개 항목은 자동 제외합니다.",
         });
       }
 
@@ -324,20 +325,66 @@ export default {
         }
         const items = [];
         for (const code of codes) {
-          // v0.8: 절대 매출/영업이익 규모가 아니라 Quality + Value를 계산하기 위해
-          // 손익, 재무비율, 현재 밸류에이션을 순차적으로 수집합니다.
+          // v1.0: 매출 절대규모보다 분기/연간 성장의 일관성 + Value를 중시합니다.
           const annualRes = await safeSource("연간 손익", () => kisIncomeStatement(env, code, "0"));
+          const quarterRes = await safeSource("분기 손익", () => kisIncomeStatement(env, code, "1"));
           const ratioRes = await safeSource("재무비율", () => kisFinancialRatio(env, code, "0"));
           const priceRes = await safeSource("현재 밸류에이션", () => kisCurrentPrice(env, code));
           items.push(buildStockRankItem(
             code,
             annualRes.value?.output || [],
+            quarterRes.value?.output || [],
             ratioRes.value?.output || [],
             priceRes.value?.output || {},
-            [annualRes, ratioRes, priceRes]
+            [annualRes, quarterRes, ratioRes, priceRes]
           ));
         }
-        return json({ ok: true, items, scoringVersion: "quality-value-v8" });
+        return json({ ok: true, items, scoringVersion: "quarter-consistency-value-v10" });
+      }
+
+
+      if (url.pathname === "/api/deep-signals") {
+        requireEnv(env, ["KIS_APP_KEY", "KIS_APP_SECRET"]);
+        const code = normalizeCode(url.searchParams.get("code") || "005930");
+        const name = String(url.searchParams.get("name") || "").trim();
+
+        const investorRes = await safeSource("외국인·기관", () => kisInvestor(env, code));
+        const dailyRes = await safeSource("외국인 보유비율", () => kisDailyPrice30(env, code));
+        const chartRes = await safeSource("1년 가격·거래량", () => kisDailyChart(env, code, 270));
+
+        const technical = analyzeTechnical(chartRes.value || []);
+        const supply = analyzeSupply(investorRes.value?.output || [], dailyRes.value?.output || []);
+        const accumulation = analyzeAccumulation(technical, supply);
+
+        let disclosureRisk = { available: false, penalty: 0, items: [], corpCode: null, message: "DART 미사용" };
+        if (hasBinding(env, "DART_API_KEY")) {
+          try { disclosureRisk = await dartDisclosureRisk(env, code); }
+          catch (error) { disclosureRisk = { available: false, penalty: 0, items: [], corpCode: null, message: safeErrorMessage(error) }; }
+        }
+
+        let newsRisk = { available: false, penalty: 0, headlines: [], message: "뉴스 보조신호 미사용" };
+        if (name) {
+          try { newsRisk = await fetchNewsRisk(name); }
+          catch (error) { newsRisk = { available: false, penalty: 0, headlines: [], message: safeErrorMessage(error) }; }
+        }
+
+        const riskPenalty = Math.min(25, Number(disclosureRisk.penalty || 0) + Number(newsRisk.penalty || 0));
+        return json({
+          ok: true,
+          code,
+          accumulation,
+          supply,
+          technical: {
+            price1yChangePct: technical.price1yChangePct ?? null,
+            close: technical.close ?? null,
+            ma20: technical.ma20 ?? null,
+            ma60: technical.ma60 ?? null,
+            ma120: technical.ma120 ?? null,
+            zone: technical.zone || null,
+          },
+          risk: { penalty: riskPenalty, disclosure: disclosureRisk, news: newsRisk },
+          sourceErrors: [investorRes, dailyRes, chartRes].filter((x) => !x.ok).map((x) => ({ label: x.label, error: x.error })),
+        });
       }
 
       if (url.pathname === "/api/target-opinion") {
@@ -362,6 +409,45 @@ export default {
         } catch (error) {
           return json({ ok: true, code, latest: null, rows: [], warning: safeErrorMessage(error) });
         }
+      }
+
+      if (url.pathname === "/api/loopera-advice") {
+        if (request.method !== "POST") return json({ ok: false, error: "POST 요청만 지원합니다." }, 405);
+        requireEnv(env, ["KIS_APP_KEY", "KIS_APP_SECRET"]);
+        let body;
+        try { body = await request.json(); }
+        catch { return json({ ok: false, error: "요청 JSON을 읽지 못했습니다." }, 400); }
+
+        const candidate = body?.candidate && typeof body.candidate === "object" ? body.candidate : {};
+        const member = body?.member && typeof body.member === "object" ? body.member : {};
+        const sector = body?.sector && typeof body.sector === "object" ? body.sector : {};
+        const peerContext = body?.peerContext && typeof body.peerContext === "object" ? body.peerContext : {};
+        const code = normalizeCode(candidate.code || member.code || "");
+
+        let accounting = { available: false, message: "DART 재무제표 원문 검증 미사용" };
+        let accountingError = null;
+        if (hasBinding(env, "DART_API_KEY")) {
+          try { accounting = await dartResearchSnapshot(env, code); }
+          catch (error) { accountingError = safeErrorMessage(error); accounting = { available: false, message: accountingError }; }
+        }
+
+        const advice = buildLooperaAdvice({ code, candidate, member, sector, peerContext, accounting });
+        return json({
+          ok: true,
+          version: APP_VERSION,
+          code,
+          generatedAt: new Date().toISOString(),
+          methodology: {
+            name: "Loopera's Advice · independent evidence-gated implementation",
+            independentImplementation: true,
+            sourceCodeCopied: false,
+            principles: ["Hypothesis-driven", "Evidence-gated", "Research Memory", "competing mechanisms", "invalidation conditions"],
+            limitation: "현재 단계는 실시간 후보의 결정론적 Evidence Gate입니다. 실제 Rank IC·Sharpe·MDD·Neutralized IC·Incremental Residual IC·독립 OOS 성능은 과거 시점별 패널과 walk-forward 백테스트를 구축하기 전에는 계산하거나 표시하지 않습니다.",
+          },
+          accounting,
+          accountingError,
+          advice,
+        });
       }
 
       if (url.pathname === "/api/analyze") {
@@ -879,7 +965,7 @@ function analyzeSectorTrend(rows) {
   const drawdown60 = maxDrawdownPct(closes.slice(-61));
   const range120 = rangePositionPct(closes.slice(-121));
 
-  // v0.8: 모든 항목을 0/5/10 식의 계단 점수로 주지 않고 실제 퍼센트 값을 연속 점수로 변환합니다.
+  // v1.0: 모든 항목을 0/5/10 식의 계단 점수로 주지 않고 실제 퍼센트 값을 연속 점수로 변환합니다.
   // 같은 정배열이라도 이격도, 기울기, 20·60·120일 수익률, 상승일 비율, 낙폭이 다르면 점수도 달라집니다.
   const structureScore =
     smoothBandScore(gapLastMa20, -4, 5, 8) +
@@ -1495,11 +1581,11 @@ function sectorSpecialFlag(name) {
   return null;
 }
 
-function buildStockRankItem(code, annualRows, ratioRows, priceOutput = {}, callResults = []) {
+function buildStockRankItem(code, annualRows, quarterRows, ratioRows, priceOutput = {}, callResults = []) {
   const annual = normalizeIncomeRows(annualRows)
     .filter((r) => r.period)
     .sort((a, b) => b.period.localeCompare(a.period))
-    .slice(0, 3);
+    .slice(0, 4);
   const ratios = (ratioRows || []).map((r) => ({
     period: normalizePeriod(r.stac_yymm),
     reserveRatio: numOrNull(r.rsrv_rate),
@@ -1518,39 +1604,49 @@ function buildStockRankItem(code, annualRows, ratioRows, priceOutput = {}, callR
   const opCagr = cagrPercent(operating);
 
   const latestAnnual = annual[0] || {};
-  const opMargin = Number.isFinite(latestAnnual.revenue) && Number.isFinite(latestAnnual.operatingIncome) && latestAnnual.revenue !== 0
-    ? (latestAnnual.operatingIncome / latestAnnual.revenue) * 100
-    : null;
+  const opMargin = marginPct(latestAnnual.operatingIncome, latestAnnual.revenue);
   const debt = latestRatio.debtRatio;
   const reserve = latestRatio.reserveRatio;
   const roe = latestRatio.roe;
 
-  // Quality 100: 회사 크기가 아니라 성장의 방향과 재무 체력을 봅니다.
-  let revenueScore = 0;
-  if (chronological.length >= 2) {
-    revenueScore += clamp01(revenueTransitions / Math.max(1, chronological.length - 1)) * 12;
-    revenueScore += smoothBandScore(revenueCagr, -8, 22, 18);
-  } else revenueScore = 6;
+  // 분기 원자료가 누적형이면 개별 분기로 환산한 뒤 최대 12개 분기를 사용합니다.
+  const quarterHistory = normalizeStandaloneQuartersForScoring(quarterRows, annualRows).slice(-12);
+  const quarterMetrics = analyzeQuarterConsistency(quarterHistory);
 
-  let operatingScore = 0;
-  if (chronological.length) {
-    operatingScore += clamp01(opPositiveYears / chronological.length) * 10;
-    operatingScore += clamp01(opTransitions / Math.max(1, chronological.length - 1)) * 4;
-    operatingScore += smoothBandScore(opCagr, -15, 35, 6);
-  }
+  // Quality 100: 분기 실적 일관성을 가장 크게 반영합니다.
+  // 분기 50 + 연간 15 + 재무안정성 15 + 수익성/자본효율 10 + 흑자지속 10
+  const quarterlyScore = quarterMetrics.score;
+
+  let annualScore = 0;
+  if (chronological.length >= 2) {
+    annualScore += clamp01(revenueTransitions / Math.max(1, chronological.length - 1)) * 6;
+    annualScore += smoothBandScore(revenueCagr, -6, 18, 5);
+    annualScore += clamp01(opTransitions / Math.max(1, chronological.length - 1)) * 2;
+    annualScore += smoothBandScore(opCagr, -10, 28, 2);
+  } else annualScore = 5;
 
   const debtScore = Number.isFinite(debt)
-    ? Math.max(0, Math.min(20, 20 * (1 - Math.max(0, debt - 20) / 230)))
-    : 7;
+    ? Math.max(0, Math.min(10, 10 * (1 - Math.max(0, debt - 30) / 220)))
+    : 3.5;
   const reserveScore = Number.isFinite(reserve)
-    ? Math.max(0, Math.min(10, (Math.log10(Math.max(0, reserve) + 1) / Math.log10(3001)) * 10))
-    : 3;
-  const roeScore = Number.isFinite(roe) ? smoothBandScore(roe, -2, 22, 10) : 3;
-  const marginScore = Number.isFinite(opMargin) ? smoothBandScore(opMargin, -2, 22, 10) : 3;
+    ? Math.max(0, Math.min(5, (Math.log10(Math.max(0, reserve) + 1) / Math.log10(3001)) * 5))
+    : 1.5;
+  const stabilityScore = debtScore + reserveScore;
 
-  const qualityScore = round(Math.max(0, Math.min(100,
-    revenueScore + operatingScore + debtScore + reserveScore + roeScore + marginScore
-  )), 1);
+  const roeScore = Number.isFinite(roe) ? smoothBandScore(roe, -1, 22, 6) : 2;
+  const marginScore = Number.isFinite(opMargin) ? smoothBandScore(opMargin, -1, 20, 4) : 1.5;
+  const profitabilityScore = roeScore + marginScore;
+
+  let profitPersistenceScore = 0;
+  if (chronological.length) profitPersistenceScore += clamp01(opPositiveYears / chronological.length) * 5;
+  if (quarterHistory.length) {
+    const qPositive = quarterHistory.filter((x) => Number(x.operatingIncome) > 0).length;
+    profitPersistenceScore += clamp01(qPositive / quarterHistory.length) * 5;
+  } else profitPersistenceScore += 2;
+
+  const qualityBeforePenalty = quarterlyScore + annualScore + stabilityScore + profitabilityScore + profitPersistenceScore;
+  const spikePenalty = quarterMetrics.oneOffSpikePenalty;
+  const qualityScore = round(Math.max(0, Math.min(100, qualityBeforePenalty - spikePenalty)), 1);
 
   const p = priceOutput || {};
   const price = numOrNull(p.stck_prpr);
@@ -1558,17 +1654,8 @@ function buildStockRankItem(code, annualRows, ratioRows, priceOutput = {}, callR
   const pbr = numOrNull(p.pbr);
   const eps = numOrNull(p.eps);
   const bps = numOrNull(p.bps);
-  // KIS 주식현재가에는 250거래일 고저가가 제공됩니다. 약 52주 위치 계산에 우선 사용합니다.
-  const high52 = firstFinite(
-    numOrNull(p.d250_hgpr),
-    numOrNull(p.w52_hgpr),
-    numOrNull(p.stck_dryy_hgpr)
-  );
-  const low52 = firstFinite(
-    numOrNull(p.d250_lwpr),
-    numOrNull(p.w52_lwpr),
-    numOrNull(p.stck_dryy_lwpr)
-  );
+  const high52 = firstFinite(numOrNull(p.d250_hgpr), numOrNull(p.w52_hgpr), numOrNull(p.stck_dryy_hgpr));
+  const low52 = firstFinite(numOrNull(p.d250_lwpr), numOrNull(p.w52_lwpr), numOrNull(p.stck_dryy_lwpr));
   const position52 = Number.isFinite(price) && Number.isFinite(high52) && Number.isFinite(low52) && high52 > low52
     ? Math.max(0, Math.min(100, ((price - low52) / (high52 - low52)) * 100))
     : null;
@@ -1581,36 +1668,33 @@ function buildStockRankItem(code, annualRows, ratioRows, priceOutput = {}, callR
   const trapWarnings = [];
   if (Number.isFinite(roe) && roe <= 0) trapWarnings.push("ROE 0% 이하");
   if (Number.isFinite(debt) && debt >= 200) trapWarnings.push("부채비율 200% 이상");
-  if (chronological.length >= 3 && revenueTransitions === 0) trapWarnings.push("최근 3년 매출 감소");
-  if (chronological.length >= 3 && opPositiveYears < 2) trapWarnings.push("영업이익 흑자 지속성 부족");
+  if (chronological.length >= 3 && revenueTransitions === 0) trapWarnings.push("최근 연간 매출 감소");
+  if (chronological.length >= 3 && opPositiveYears < 2) trapWarnings.push("연간 영업이익 흑자 지속성 부족");
+  if (quarterMetrics.testPass === false) trapWarnings.push("최근 4분기 성장 검증 미통과");
+  if (quarterMetrics.oneOffSpikePenalty >= 5) trapWarnings.push("한 분기 일회성 급증 가능성");
 
   return {
     code,
-    // 클라이언트에서 동일 섹터 상대평가를 합친 뒤 최종 FF 점수로 바뀝니다.
     score: qualityScore,
     grade: gradeFromScore(qualityScore),
     qualityScore,
     qualityGrade: gradeFromScore(qualityScore),
     valueScore: null,
     finalScore: null,
-    revenueGrowing3y: chronological.length >= 3 && revenueTransitions === 2,
+    revenueGrowing3y: chronological.length >= 3 && revenueTransitions >= chronological.length - 1,
     revenueTransitions,
     revenueCagr: Number.isFinite(revenueCagr) ? round(revenueCagr, 2) : null,
-    operatingProfitPositive3y: chronological.length >= 3 && opPositiveYears === 3,
+    operatingProfitPositive3y: chronological.length >= 3 && opPositiveYears >= 3,
     operatingCagr: Number.isFinite(opCagr) ? round(opCagr, 2) : null,
-    annual,
+    annual: annual.slice(0, 3),
+    quarterly: quarterHistory.slice(-8).reverse(),
+    quarterlyMetrics: quarterMetrics,
     debtRatio: Number.isFinite(debt) ? debt : null,
     reserveRatio: Number.isFinite(reserve) ? reserve : null,
     roe: Number.isFinite(roe) ? roe : null,
     operatingMargin: Number.isFinite(opMargin) ? round(opMargin, 2) : null,
     valuation: {
-      price,
-      per,
-      pbr,
-      eps,
-      bps,
-      high52,
-      low52,
+      price, per, pbr, eps, bps, high52, low52,
       high52Date: String(p.d250_hgpr_date || p.w52_hgpr_date || p.dryy_hgpr_date || "") || null,
       low52Date: String(p.d250_lwpr_date || p.w52_lwpr_date || p.dryy_lwpr_date || "") || null,
       position52: Number.isFinite(position52) ? round(position52, 2) : null,
@@ -1620,16 +1704,146 @@ function buildStockRankItem(code, annualRows, ratioRows, priceOutput = {}, callR
     },
     valueTrapWarnings: trapWarnings,
     scoreBreakdown: {
-      revenue: round(revenueScore, 1),
-      operating: round(operatingScore, 1),
-      debt: round(debtScore, 1),
-      reserve: round(reserveScore, 1),
-      roe: round(roeScore, 1),
-      margin: round(marginScore, 1),
+      quarterly: round(quarterlyScore, 1),
+      annual: round(annualScore, 1),
+      stability: round(stabilityScore, 1),
+      profitability: round(profitabilityScore, 1),
+      profitPersistence: round(profitPersistenceScore, 1),
+      spikePenalty: round(spikePenalty, 1),
     },
     errors: callResults.filter((x) => !x.ok).map((x) => `${x.label}: ${x.error}`),
-    scoreRule: "Quality 100 = 매출30 + 영업이익20 + 부채20 + 유보10 + ROE10 + 영업이익률10. Value는 동일 섹터 상대평가로 별도 계산",
+    scoreRule: "Quality 100 = 분기 성장·일관성 50 + 연간 15 + 재무안정성 15 + ROE·영업이익률 10 + 흑자지속 10 - 일회성 분기 급증 페널티",
   };
+}
+
+function normalizeStandaloneQuartersForScoring(quarterRows, annualRows) {
+  const qAsc = normalizeIncomeRows(quarterRows).sort((a, b) => a.period.localeCompare(b.period));
+  const aAsc = normalizeIncomeRows(annualRows).sort((a, b) => a.period.localeCompare(b.period));
+  const cumulative = detectCumulativeQuarterRows(qAsc, aAsc);
+  const rows = cumulative
+    ? toStandaloneQuarters(qAsc, aAsc)
+    : qAsc.map((r) => ({ ...r, label: quarterLabel(r.period), convertedFromCumulative: false }));
+  const uniq = new Map();
+  for (const row of rows) if (row.period && Number.isFinite(row.revenue)) uniq.set(row.period, row);
+  return [...uniq.values()].sort((a, b) => a.period.localeCompare(b.period));
+}
+
+function analyzeQuarterConsistency(rows) {
+  const q = (rows || []).filter((x) => Number.isFinite(x.revenue) && x.revenue > 0).slice(-12);
+  if (q.length < 4) {
+    return { score: 18, trainPass: null, testPass: null, oneOffSpikePenalty: 0, message: "분기 데이터 부족" };
+  }
+  const test = q.slice(-4);
+  const train = q.slice(0, Math.max(0, q.length - 4));
+  const testRev = test.map((x) => Number(x.revenue));
+  const testMargin = test.map((x) => marginPct(x.operatingIncome, x.revenue)).filter(Number.isFinite);
+  const trainRev = train.map((x) => Number(x.revenue));
+  const trainMargin = train.map((x) => marginPct(x.operatingIncome, x.revenue)).filter(Number.isFinite);
+
+  const testRevenueTransitionRatio = positiveTransitionRatio(testRev);
+  const testMarginTransitionRatio = positiveTransitionRatio(testMargin);
+  const testRevenueSlope = linearSlopePct(testRev);
+  const testMarginSlope = linearSlopePct(testMargin);
+  const trainRevenueSlope = trainRev.length >= 4 ? linearSlopePct(trainRev) : null;
+  const trainMarginSlope = trainMargin.length >= 4 ? linearSlopePct(trainMargin) : null;
+
+  let yoyRevenuePositive = null;
+  let yoyOperatingPositive = null;
+  let ttmRevenueGrowth = null;
+  let ttmOperatingGrowth = null;
+  if (q.length >= 8) {
+    const recent4 = q.slice(-4);
+    const prev4 = q.slice(-8, -4);
+    const revYoy = recent4.map((x, i) => pctChange(x.revenue, prev4[i]?.revenue));
+    const opYoy = recent4.map((x, i) => pctChange(x.operatingIncome, prev4[i]?.operatingIncome));
+    yoyRevenuePositive = revYoy.filter((x) => Number.isFinite(x) && x > 0).length / 4;
+    yoyOperatingPositive = opYoy.filter((x) => Number.isFinite(x) && x > 0).length / 4;
+    ttmRevenueGrowth = pctChange(sumValues(recent4, "revenue"), sumValues(prev4, "revenue"));
+    ttmOperatingGrowth = pctChange(sumValues(recent4, "operatingIncome"), sumValues(prev4, "operatingIncome"));
+  }
+
+  const trainPass = trainRev.length >= 4 ? (Number(trainRevenueSlope) > 0 && (trainMargin.length < 4 || Number(trainMarginSlope) >= -0.15)) : null;
+  const testPass = Number(testRevenueSlope) > 0 && Number(testMarginSlope) >= 0 && testRevenueTransitionRatio >= 2/3;
+
+  let score = 0;
+  score += testRevenueTransitionRatio * 10;
+  score += smoothBandScore(testRevenueSlope, -3, 8, 8);
+  score += testMarginTransitionRatio * 8;
+  score += smoothBandScore(testMarginSlope, -0.5, 1.5, 7);
+  score += (yoyRevenuePositive == null ? 0.45 : yoyRevenuePositive) * 6;
+  score += (yoyOperatingPositive == null ? 0.4 : yoyOperatingPositive) * 5;
+  if (trainPass === true && testPass === true) score += 6;
+  else if (testPass === true) score += 3;
+
+  const oneOffSpikePenalty = detectOneOffSpikePenalty(q);
+  score = Math.max(0, Math.min(50, score));
+  return {
+    score: round(score, 1),
+    trainPass,
+    testPass,
+    trainCount: train.length,
+    testCount: test.length,
+    testRevenueSlopePctPerQuarter: Number.isFinite(testRevenueSlope) ? round(testRevenueSlope, 2) : null,
+    testMarginSlopePpPerQuarter: Number.isFinite(testMarginSlope) ? round(testMarginSlope, 2) : null,
+    testRevenueTransitionRatio: round(testRevenueTransitionRatio * 100, 1),
+    testMarginTransitionRatio: round(testMarginTransitionRatio * 100, 1),
+    yoyRevenuePositiveRatio: yoyRevenuePositive == null ? null : round(yoyRevenuePositive * 100, 1),
+    yoyOperatingPositiveRatio: yoyOperatingPositive == null ? null : round(yoyOperatingPositive * 100, 1),
+    ttmRevenueGrowth: Number.isFinite(ttmRevenueGrowth) ? round(ttmRevenueGrowth, 1) : null,
+    ttmOperatingGrowth: Number.isFinite(ttmOperatingGrowth) ? round(ttmOperatingGrowth, 1) : null,
+    oneOffSpikePenalty: round(oneOffSpikePenalty, 1),
+  };
+}
+
+function detectOneOffSpikePenalty(rows) {
+  const q = (rows || []).slice(-8);
+  if (q.length < 5) return 0;
+  const ops = q.map((x) => Number(x.operatingIncome)).filter((x) => Number.isFinite(x) && x > 0);
+  if (ops.length < 4) return 0;
+  const sorted = [...ops].sort((a, b) => a - b);
+  const med = sorted[Math.floor(sorted.length / 2)] || 0;
+  const max = Math.max(...ops);
+  if (!(med > 0) || max < med * 2.2) return 0;
+  const idx = q.findIndex((x) => Number(x.operatingIncome) === max);
+  const next = idx >= 0 && idx < q.length - 1 ? Number(q[idx + 1].operatingIncome) : null;
+  if (Number.isFinite(next) && next < max * 0.65) return 8;
+  return 4;
+}
+
+function positiveTransitionRatio(values) {
+  const v = (values || []).map(Number).filter(Number.isFinite);
+  if (v.length < 2) return 0.5;
+  let n = 0;
+  for (let i = 1; i < v.length; i++) if (v[i] > v[i - 1]) n++;
+  return n / (v.length - 1);
+}
+
+function linearSlopePct(values) {
+  const v = (values || []).map(Number).filter(Number.isFinite);
+  if (v.length < 2) return null;
+  const n = v.length;
+  const xMean = (n - 1) / 2;
+  const yMean = v.reduce((a, b) => a + b, 0) / n;
+  if (!Number.isFinite(yMean) || yMean === 0) return null;
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) { num += (i - xMean) * (v[i] - yMean); den += (i - xMean) ** 2; }
+  return den ? (num / den) / Math.abs(yMean) * 100 : null;
+}
+
+function marginPct(op, revenue) {
+  const o = Number(op), r = Number(revenue);
+  return Number.isFinite(o) && Number.isFinite(r) && r !== 0 ? (o / r) * 100 : null;
+}
+
+function pctChange(current, previous) {
+  const c = Number(current), p = Number(previous);
+  if (!Number.isFinite(c) || !Number.isFinite(p) || p === 0) return null;
+  return ((c - p) / Math.abs(p)) * 100;
+}
+
+function sumValues(rows, key) {
+  const nums = (rows || []).map((x) => Number(x?.[key])).filter(Number.isFinite);
+  return nums.length ? nums.reduce((a, b) => a + b, 0) : null;
 }
 
 function firstFinite(...values) {
@@ -1700,6 +1914,342 @@ async function kisDailyChart(env, code, targetRows = 190) {
   return [...collected.values()].sort((a, b) => String(a.stck_bsop_date).localeCompare(String(b.stck_bsop_date)));
 }
 
+// -----------------------------------------------------------------------------
+// v1.0 · Loopera's Advice
+// 공개된 연구 철학(Hypothesis-driven / Evidence-gated / Research Memory)을
+// 참고해 독립적으로 구현한 결정론적 검증 계층입니다. 외부 프로젝트 코드는 복사하지 않습니다.
+// -----------------------------------------------------------------------------
+async function dartResearchSnapshot(env, stockCode) {
+  const map = await dartCorpMap(env);
+  const corp = map[stockCode];
+  if (!corp?.corpCode) {
+    return { available: false, corpCode: null, message: "DART 기업고유번호 매핑 없음" };
+  }
+
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth() + 1;
+  const day = now.getUTCDate();
+  const candidates = [];
+  // 정기보고서 제출 가능 시점을 보수적으로 잡고, 실제 미제출이면 다음 후보로 폴백합니다.
+  if (month > 11 || (month === 11 && day >= 15)) candidates.push({ year, code: "11014", label: `${year} 3분기` });
+  if (month > 8 || (month === 8 && day >= 15)) candidates.push({ year, code: "11012", label: `${year} 반기` });
+  if (month > 5 || (month === 5 && day >= 15)) candidates.push({ year, code: "11013", label: `${year} 1분기` });
+  candidates.push({ year: year - 1, code: "11011", label: `${year - 1} 사업연도` });
+  candidates.push({ year: year - 2, code: "11011", label: `${year - 2} 사업연도` });
+
+  let lastMessage = "사용 가능한 재무제표 없음";
+  for (const report of candidates) {
+    for (const fsDiv of ["CFS", "OFS"]) {
+      const qs = new URLSearchParams({
+        crtfc_key: bindingValue(env, "DART_API_KEY"),
+        corp_code: corp.corpCode,
+        bsns_year: String(report.year),
+        reprt_code: report.code,
+        fs_div: fsDiv,
+      });
+      let data;
+      try { data = await dartJson(`${DART_BASE}/fnlttSinglAcntAll.json?${qs}`, "DART 전체재무제표"); }
+      catch (error) { lastMessage = safeErrorMessage(error); continue; }
+      if (data.status === "013") { lastMessage = `${report.label} ${fsDiv}: 조회 데이터 없음`; continue; }
+      if (data.status && data.status !== "000") { lastMessage = `${data.status}: ${data.message || "DART 오류"}`; continue; }
+      const rows = Array.isArray(data.list) ? data.list : [];
+      if (!rows.length) continue;
+
+      const revenue = dartAccountAmount(rows, [/^매출액$/, /수익\(매출액\)/, /^영업수익$/, /^매출$/]);
+      const operatingIncome = dartAccountAmount(rows, [/^영업이익/, /^영업손익/]);
+      const netIncome = dartAccountAmount(rows, [/당기순이익/, /분기순이익/, /반기순이익/, /연결당기순이익/]);
+      const operatingCashFlow = dartAccountAmount(rows, [/영업활동.*현금흐름/, /영업활동으로.*현금흐름/]);
+      const inventory = dartAccountAmount(rows, [/^재고자산$/]);
+      const receivables = dartAccountAmount(rows, [/매출채권/, /매출채권및기타채권/, /매출채권 및 기타채권/]);
+      const cash = dartAccountAmount(rows, [/현금및현금성자산/, /현금 및 현금성자산/]);
+      const totalAssets = dartAccountAmount(rows, [/^자산총계$/]);
+      const totalLiabilities = dartAccountAmount(rows, [/^부채총계$/]);
+      const totalEquity = dartAccountAmount(rows, [/^자본총계$/]);
+      const cashConversionOperating = Number.isFinite(operatingCashFlow) && Number.isFinite(operatingIncome) && operatingIncome > 0
+        ? operatingCashFlow / operatingIncome : null;
+      const cashConversionNet = Number.isFinite(operatingCashFlow) && Number.isFinite(netIncome) && netIncome > 0
+        ? operatingCashFlow / netIncome : null;
+      const workingCapitalToRevenue = Number.isFinite(revenue) && revenue > 0 && (Number.isFinite(inventory) || Number.isFinite(receivables))
+        ? ((Number(inventory) || 0) + (Number(receivables) || 0)) / revenue : null;
+
+      return {
+        available: true,
+        corpCode: corp.corpCode,
+        corpName: corp.corpName || null,
+        reportYear: report.year,
+        reportCode: report.code,
+        reportLabel: report.label,
+        fsDiv,
+        revenue,
+        operatingIncome,
+        netIncome,
+        operatingCashFlow,
+        inventory,
+        receivables,
+        cash,
+        totalAssets,
+        totalLiabilities,
+        totalEquity,
+        cashConversionOperating: Number.isFinite(cashConversionOperating) ? round(cashConversionOperating, 2) : null,
+        cashConversionNet: Number.isFinite(cashConversionNet) ? round(cashConversionNet, 2) : null,
+        workingCapitalToRevenue: Number.isFinite(workingCapitalToRevenue) ? round(workingCapitalToRevenue, 3) : null,
+        message: `${report.label} ${fsDiv === "CFS" ? "연결" : "별도"} 재무제표 원문 대조`,
+      };
+    }
+  }
+  return { available: false, corpCode: corp.corpCode, corpName: corp.corpName || null, message: lastMessage };
+}
+
+function dartAccountAmount(rows, patterns) {
+  for (const row of rows || []) {
+    const name = String(row.account_nm || "").replace(/\s+/g, "").trim();
+    if (!name || !(patterns || []).some((rx) => rx.test(name))) continue;
+    const values = [row.thstrm_amount, row.thstrm_add_amount, row.frmtrm_amount, row.frmtrm_add_amount];
+    for (const value of values) {
+      const parsed = dartAmount(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function dartAmount(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const clean = String(value).replace(/,/g, "").replace(/[()]/g, (m) => m === "(" ? "-" : "").replace(/\s+/g, "");
+  const normalized = clean.endsWith(")") ? clean.slice(0, -1) : clean;
+  const n = Number(normalized);
+  return Number.isFinite(n) ? n : null;
+}
+
+function buildLooperaAdvice({ code, candidate = {}, member = {}, sector = {}, peerContext = {}, accounting = {} }) {
+  const q = candidate.quarterlyMetrics || {};
+  const valuation = candidate.valuation || {};
+  const risk = candidate.risk || {};
+  const disclosureItems = risk?.disclosure?.items || [];
+  const quality = finiteOr(candidate.qualityScore, candidate.score, 0);
+  const value = finiteOr(candidate.valueScore, 0);
+  const accumulation = finiteOr(candidate.accumulationScore, candidate.accumulation?.score, 0);
+  const debt = numOrNull(candidate.debtRatio);
+  const roe = numOrNull(candidate.roe);
+  const price1y = numOrNull(candidate.price1yChangePct);
+  const position52 = numOrNull(valuation.position52);
+  const riskPenalty = Math.max(0, finiteOr(candidate.riskPenalty, risk.penalty, 0));
+  const annualCount = Array.isArray(candidate.annual) ? candidate.annual.length : 0;
+  const quarterCount = Math.max(
+    Array.isArray(candidate.quarterly) ? candidate.quarterly.length : 0,
+    Number(q.trainCount || 0) + Number(q.testCount || 0)
+  );
+
+  const growthStrong = Number(q.ttmRevenueGrowth) > 0 && Number(q.ttmOperatingGrowth) > 0;
+  const marginImproving = Number(q.testMarginSlopePpPerQuarter) >= 0 && Number(q.testMarginTransitionRatio) >= 50;
+  const cheapEvidence = value >= 65 || (Number.isFinite(position52) && position52 <= 45) || (growthStrong && Number.isFinite(price1y) && price1y < 0);
+  const accumulationStrong = accumulation >= 68;
+  const stable = (debt == null || debt < 150) && (roe == null || roe > 0);
+  const sectorTrend = numOrNull(sector?.trend?.score ?? sector?.score);
+  const sectorSupport = sectorTrend == null || sectorTrend >= 60;
+  const trainPass = q.trainPass === true;
+  const testPass = q.testPass === true;
+  const spikePenalty = Math.max(0, Number(q.oneOffSpikePenalty || 0));
+
+  let coveragePoints = 0;
+  coveragePoints += Math.min(30, quarterCount / 8 * 30);
+  coveragePoints += Math.min(18, annualCount / 3 * 18);
+  coveragePoints += valuation && Object.keys(valuation).length ? 15 : 0;
+  coveragePoints += candidate.accumulationScore != null ? 12 : 0;
+  coveragePoints += candidate.riskPenalty != null ? 10 : 0;
+  coveragePoints += accounting.available ? 15 : 5;
+  const coverageScore = clamp100(coveragePoints);
+
+  // 라이브 화면은 '현재 공개자료'만 사용한다. 과거 시점별 공개일 재구성이 없으므로 Timing gate는 통과가 아니라 주의 수준으로 제한한다.
+  let timingScore = 68;
+  if (quarterCount >= 8) timingScore += 8;
+  if (accounting.available) timingScore += 5;
+  if (q.testCount >= 4) timingScore += 4;
+  timingScore = Math.min(82, timingScore);
+
+  let accountingScore = accounting.available ? 68 : 60;
+  const cfoOp = numOrNull(accounting.cashConversionOperating);
+  const cfoNet = numOrNull(accounting.cashConversionNet);
+  if (Number.isFinite(cfoOp)) {
+    if (cfoOp >= 1.0) accountingScore += 18;
+    else if (cfoOp >= 0.7) accountingScore += 12;
+    else if (cfoOp >= 0.4) accountingScore += 2;
+    else if (cfoOp >= 0) accountingScore -= 15;
+    else accountingScore -= 25;
+  }
+  if (Number.isFinite(cfoNet) && cfoNet >= 1) accountingScore += 6;
+  if (Number.isFinite(accounting.operatingIncome) && accounting.operatingIncome > 0 && Number.isFinite(accounting.operatingCashFlow) && accounting.operatingCashFlow < 0) accountingScore -= 18;
+  accountingScore = clamp100(accountingScore);
+
+  const logicDimensions = [growthStrong, marginImproving, cheapEvidence, accumulationStrong, stable, sectorSupport].filter(Boolean).length;
+  let logicScore = 40 + logicDimensions * 9;
+  if (growthStrong && price1y != null && price1y < 0) logicScore += 6;
+  if (!growthStrong && value >= 75) logicScore -= 8; // 싸기만 한 가치함정 방지
+  logicScore = clamp100(logicScore);
+
+  let robustnessScore = 45;
+  if (trainPass) robustnessScore += 17;
+  if (testPass) robustnessScore += 22;
+  if (Number(q.yoyRevenuePositiveRatio) >= 75) robustnessScore += 7;
+  if (Number(q.yoyOperatingPositiveRatio) >= 75) robustnessScore += 7;
+  robustnessScore -= spikePenalty * 1.8;
+  if (Number(candidate.revenueCagr) > 0) robustnessScore += 4;
+  if (Number(candidate.operatingCagr) > 0) robustnessScore += 4;
+  robustnessScore = clamp100(robustnessScore);
+
+  const peerQ = numOrNull(peerContext.qualityMedian);
+  const peerV = numOrNull(peerContext.valueMedian);
+  const peerA = numOrNull(peerContext.accumulationMedian);
+  let independentDimensions = 0;
+  if (peerQ == null ? quality >= 65 : quality >= peerQ + 3) independentDimensions++;
+  if (peerV == null ? value >= 65 : value >= peerV + 3) independentDimensions++;
+  if (peerA == null ? accumulationStrong : accumulation >= peerA + 4) independentDimensions++;
+  if (growthStrong && Number.isFinite(price1y) && price1y < 0) independentDimensions++;
+  if (accountingScore >= 70) independentDimensions++;
+  if (riskPenalty === 0) independentDimensions++;
+  let incrementalScore = clamp100(36 + independentDimensions * 10);
+  if (logicDimensions < 3) incrementalScore = Math.min(incrementalScore, 58);
+
+  const supportEvidence = [];
+  const counterEvidence = [];
+  if (growthStrong) supportEvidence.push(`TTM 매출 ${signedNumber(q.ttmRevenueGrowth, "%")} · 영업이익 ${signedNumber(q.ttmOperatingGrowth, "%")} 성장`);
+  else counterEvidence.push("TTM 매출·영업이익이 동시에 성장한다는 증거가 부족합니다.");
+  if (testPass) supportEvidence.push("최근 4분기 Test 구간의 매출·영업이익률 지속성 검증 통과");
+  else counterEvidence.push("최근 4분기 Test 구간이 성장 지속성 기준을 완전히 통과하지 못했습니다.");
+  if (trainPass) supportEvidence.push("과거 Train 구간에서도 성장 방향이 유지되었습니다.");
+  else if (q.trainPass === false) counterEvidence.push("과거 Train 구간에서는 같은 성장 패턴이 재현되지 않았습니다.");
+  if (cheapEvidence) supportEvidence.push(`Value ${round(value, 1)}/100 · 52주 위치 ${position52 == null ? "자료없음" : `${round(position52, 1)}%`} · 1년 주가 ${price1y == null ? "자료없음" : signedNumber(price1y, "%")}`);
+  else counterEvidence.push("현재 가격이 동종업계·52주 위치·실적 대비 충분히 싸다는 증거가 약합니다.");
+  if (accumulationStrong) supportEvidence.push(`외국인·기관/거래량 매집 ${round(accumulation, 1)}/100`);
+  else counterEvidence.push("외국인·기관의 지속적 매집 신호가 강하지 않습니다.");
+  if (accounting.available && Number.isFinite(cfoOp)) {
+    if (cfoOp >= 0.7) supportEvidence.push(`DART 현금전환: 영업현금흐름/영업이익 ${round(cfoOp, 2)}배`);
+    else counterEvidence.push(`DART 현금전환이 약함: 영업현금흐름/영업이익 ${round(cfoOp, 2)}배`);
+  } else counterEvidence.push("DART 현금흐름 원문 검증 자료가 충분하지 않습니다.");
+  if (riskPenalty > 0) counterEvidence.push(`최근 공시·뉴스 위험 감점 ${round(riskPenalty, 1)}점`);
+  if (spikePenalty > 0) counterEvidence.push(`한 분기 일회성 실적 급증 가능성 페널티 ${round(spikePenalty, 1)}점`);
+
+  const criticalRisk = disclosureItems.some((x) => x.category === "중대 리스크" || Number(x.weight) >= 10);
+  const gates = [
+    evidenceGate("coverage", "데이터·Coverage", coverageScore, coverageScore >= 72 ? "핵심 입력 데이터가 충분합니다." : "분기·연간·수급·공시 중 일부 데이터가 부족합니다."),
+    evidenceGate("timing", "정보시점", timingScore, "현재 공개 API 데이터만 사용합니다. 과거 point-in-time 공개일 재구성은 아직 백테스트 단계가 아닙니다."),
+    evidenceGate("accounting", "회계정의·현금", accountingScore, accounting.available ? accounting.message : "DART 원문 재무제표 대조가 불완전합니다."),
+    evidenceGate("logic", "경제적 논리", logicScore, `${logicDimensions}/6개 독립 논리 축이 같은 방향을 지지합니다.`),
+    evidenceGate("robustness", "Train→Test 안정성", robustnessScore, `Train ${q.trainPass === true ? "통과" : q.trainPass === false ? "미통과" : "자료부족"} · Test ${q.testPass === true ? "통과" : q.testPass === false ? "미통과" : "자료부족"} · Spike -${round(spikePenalty, 1)}`),
+    evidenceGate("incremental", "독립 증거 프록시", incrementalScore, `${independentDimensions}/6개 독립 증거축. 실제 Incremental Residual IC가 아니라 동종후보 대비 증거 다양성 프록시입니다.`),
+  ];
+  // point-in-time 패널을 재구성하지 않은 라이브 화면에서는 Timing을 완전 통과로 과장하지 않습니다.
+  const timingGate = gates.find((g) => g.key === "timing");
+  if (timingGate) timingGate.status = "watch";
+
+  let rawScore = coverageScore * 0.10 + timingScore * 0.10 + accountingScore * 0.15 + logicScore * 0.25 + robustnessScore * 0.25 + incrementalScore * 0.15;
+  rawScore -= Math.min(20, riskPenalty * 0.75);
+  if (spikePenalty >= 8) rawScore -= 4;
+  const stopGate = gates.some((g) => g.status === "stop");
+  if (criticalRisk || stopGate) rawScore = Math.min(rawScore, 59);
+  const adviceScore = round(clamp100(rawScore), 1);
+  const decision = (criticalRisk || stopGate) ? "보류" : adviceScore >= 82 ? "우선 검토" : adviceScore >= 72 ? "추가 검증" : adviceScore >= 62 ? "관찰" : "보류";
+
+  let hypothesisTitle = "증거 부족 · 추가 관찰";
+  let mechanism = "좋은 숫자 한두 개가 아니라 서로 독립적인 실적·가격·수급·회계 증거가 같은 방향으로 모이는지 더 확인해야 합니다.";
+  if (growthStrong && Number.isFinite(price1y) && price1y < 0) {
+    hypothesisTitle = "실적 성장 대비 가격 미반영";
+    mechanism = "최근 실적과 영업이익이 개선되는 동안 1년 주가가 낮아져 있다면, 펀더멘털 변화가 가격에 충분히 반영되지 않았을 가능성을 검증할 가치가 있습니다.";
+  } else if (trainPass && testPass) {
+    hypothesisTitle = "분기 성장 지속성";
+    mechanism = "과거 Train 구간과 최근 Test 구간에서 모두 성장 방향이 유지되어 단일 분기 이벤트보다 반복 가능한 영업 개선일 가능성이 높습니다.";
+  } else if (accumulationStrong) {
+    hypothesisTitle = "수급 선행 가능성";
+    mechanism = "가격보다 외국인·기관 누적매수와 거래량 구조가 먼저 개선되는지 확인해 가격 반영 이전의 수급 변화를 가설로 둡니다.";
+  } else if (roe != null && roe >= 10 && value >= 65) {
+    hypothesisTitle = "자본효율 대비 저평가";
+    mechanism = "ROE가 유지되는 가운데 PBR·PER·52주 위치 등 가격 지표가 동종기업 대비 낮다면 가치함정이 아닌 가격 괴리인지 확인합니다.";
+  }
+
+  const competingMechanisms = [
+    "실적 개선이 구조적 성장보다 기저효과·원가 변동·일회성 수주에 의한 것일 수 있습니다.",
+    "주가 하락은 저평가가 아니라 시장이 아직 반영하지 않은 업황·회계·지배구조 악화를 선반영했을 수 있습니다.",
+    "외국인·기관 순매수는 기업 고유 판단이 아니라 지수 리밸런싱·패시브 자금·환율 영향일 수 있습니다.",
+    "낮은 PBR/PER은 성장 둔화나 자본효율 하락을 반영한 가치함정일 수 있습니다.",
+  ];
+  if (criticalRisk) competingMechanisms.unshift("중대 공시 리스크가 펀더멘털·가격 괴리보다 우선합니다.");
+
+  const failureConditions = [
+    "다음 2개 분기 중 매출 또는 영업이익률이 연속 악화",
+    "TTM 영업이익 성장률이 0% 이하로 전환",
+    "외국인·기관 20일 누적 수급이 동반 순매도로 전환",
+    "유상증자·대규모 CB/BW·감사·횡령/배임 등 중대 공시 발생",
+    "추정 적정가 괴리가 해소되거나 52주 상단으로 급격히 재평가",
+    "영업이익은 늘지만 영업현금흐름이 지속적으로 따라오지 못함",
+  ];
+
+  const accountingSummary = accounting.available ? {
+    label: accounting.message,
+    reportLabel: accounting.reportLabel,
+    fsDiv: accounting.fsDiv,
+    cashConversionOperating: accounting.cashConversionOperating,
+    cashConversionNet: accounting.cashConversionNet,
+    workingCapitalToRevenue: accounting.workingCapitalToRevenue,
+    operatingCashFlow: accounting.operatingCashFlow,
+    operatingIncome: accounting.operatingIncome,
+  } : { label: accounting.message || "DART 회계 원문 검증 자료 없음" };
+
+  return {
+    code,
+    name: member.name || candidate.name || code,
+    englishName: member.englishName || member.nameEn || "",
+    market: member.market || "",
+    sector: sector.name || "",
+    score: adviceScore,
+    decision,
+    criticalRisk,
+    hypothesis: { title: hypothesisTitle, mechanism, expectedDirection: "향후 6~12개월 상대수익률 개선 가능성 — 실제 예측력은 별도 OOS 백테스트 필요" },
+    gates,
+    supportEvidence: supportEvidence.slice(0, 8),
+    counterEvidence: counterEvidence.slice(0, 8),
+    researchContract: {
+      phenomenon: hypothesisTitle,
+      hypothesis: mechanism,
+      expectedDirection: "후보군 내 상대적 우위",
+      competingMechanisms,
+      failureConditions,
+      observableEvidence: ["분기 매출·영업이익률", "TTM 성장", "ROE/PBR·52주 위치", "외국인·기관 누적수급", "가격·거래량 구조", "DART 공시·현금흐름"],
+    },
+    accountingSummary,
+    limitations: [
+      "이 점수는 실시간 후보 검증용이며 매수·매도 신호가 아닙니다.",
+      "현재 독립 증거 Gate는 실제 Incremental Residual IC가 아닌 프록시입니다.",
+      "Rank IC·Sharpe·MDD·업종/시총 중립화·walk-forward·독립 OOS는 과거 시점별 패널 DB 구축 후에만 유효하게 계산할 수 있습니다.",
+      "DART 최신 재무 원문은 제출 시점·연결/별도 기준 차이 때문에 KIS 분기 시계열과 완전히 같은 단위가 아닐 수 있습니다.",
+    ],
+  };
+}
+
+function evidenceGate(key, name, score, reason) {
+  const s = round(clamp100(score), 1);
+  return { key, name, score: s, status: s >= 72 ? "pass" : s >= 58 ? "watch" : "stop", reason };
+}
+
+function finiteOr(...values) {
+  for (const value of values) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return 0;
+}
+
+function clamp100(value) {
+  return Math.max(0, Math.min(100, Number(value) || 0));
+}
+
+function signedNumber(value, suffix = "") {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  return `${n > 0 ? "+" : ""}${round(n, 1)}${suffix}`;
+}
+
+
 async function dartCompany(env, corpCode) {
   if (!/^\d{8}$/.test(String(corpCode))) {
     const error = new Error("DART 기업고유번호는 8자리 숫자여야 합니다. 예: 00126380");
@@ -1714,7 +2264,7 @@ async function dartCompany(env, corpCode) {
       redirect: "manual",
       headers: {
         accept: "application/json,text/plain,*/*",
-        "user-agent": "FF-Value-Hunter/0.3 (Cloudflare Worker)",
+        "user-agent": "FF-Value-Hunter/1.0 (Cloudflare Worker)",
       },
     });
   } catch (error) {
@@ -1724,7 +2274,7 @@ async function dartCompany(env, corpCode) {
   if ([301, 302, 303, 307, 308].includes(res.status)) {
     const location = res.headers.get("location") || "";
     if (/error1\.html/i.test(location)) {
-      throw new Error("OpenDART가 Cloudflare Worker 요청을 오류 페이지로 리디렉션했습니다. v0.4에서는 이 오류가 반복되지 않도록 리디렉션을 중단하고, 기업명·업종은 KIS로 대체합니다.");
+      throw new Error("OpenDART가 Cloudflare Worker 요청을 오류 페이지로 리디렉션했습니다. v1.0에서는 이 오류가 반복되지 않도록 리디렉션을 중단하고, 기업명·업종은 KIS로 대체합니다.");
     }
     throw new Error(`OpenDART가 예상치 못한 리디렉션을 반환했습니다 (HTTP ${res.status}).`);
   }
@@ -1746,6 +2296,146 @@ function assertKrxDate(basDd) {
     error.status = 400;
     throw error;
   }
+}
+
+
+async function dartCorpMap(env) {
+  const cached = await cacheJsonGet(DART_CORP_CACHE_URL);
+  if (cached?.byStock && Object.keys(cached.byStock).length > 1000) return cached.byStock;
+  const key = bindingValue(env, "DART_API_KEY");
+  const url = `${DART_BASE}/corpCode.xml?crtfc_key=${encodeURIComponent(key)}`;
+  const res = await fetch(url, { redirect: "manual", headers: { accept: "application/zip,application/octet-stream,*/*", "user-agent": "FF-Value-Hunter/1.0" } });
+  if (!res.ok) throw new Error(`DART 고유번호 다운로드 실패 HTTP ${res.status}`);
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const xmlBytes = await unzipZipEntry(bytes, ".xml");
+  const xml = new TextDecoder("utf-8").decode(xmlBytes);
+  const byStock = {};
+  const listRe = /<list>([\s\S]*?)<\/list>/g;
+  let m;
+  while ((m = listRe.exec(xml))) {
+    const block = m[1];
+    const stock = xmlTag(block, "stock_code").trim();
+    const corp = xmlTag(block, "corp_code").trim();
+    if (/^\d{6}$/.test(stock) && /^\d{8}$/.test(corp)) {
+      byStock[stock] = { corpCode: corp, corpName: xmlTag(block, "corp_name").trim(), engName: xmlTag(block, "corp_eng_name").trim() };
+    }
+  }
+  await cacheJsonPut(DART_CORP_CACHE_URL, { byStock, updatedAt: new Date().toISOString() }, 60 * 60 * 24);
+  return byStock;
+}
+
+function xmlTag(block, tag) {
+  const m = String(block || "").match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`));
+  return m ? decodeXml(m[1]) : "";
+}
+
+function decodeXml(text) {
+  return String(text || "")
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+}
+
+async function dartDisclosureRisk(env, stockCode) {
+  const map = await dartCorpMap(env);
+  const corp = map[stockCode];
+  if (!corp?.corpCode) return { available: false, penalty: 0, items: [], corpCode: null, message: "DART 고유번호 매핑 없음" };
+  const end = new Date();
+  const start = new Date(end); start.setUTCDate(start.getUTCDate() - 370);
+  const qs = new URLSearchParams({
+    crtfc_key: bindingValue(env, "DART_API_KEY"), corp_code: corp.corpCode,
+    bgn_de: yyyymmdd(start), end_de: yyyymmdd(end), sort: "date", sort_mth: "desc", page_no: "1", page_count: "100",
+  });
+  const data = await dartJson(`${DART_BASE}/list.json?${qs}`, "DART 공시검색");
+  if (data.status && !["000", "013"].includes(data.status)) throw new Error(`DART 공시검색 ${data.status}: ${data.message || "오류"}`);
+  const rows = Array.isArray(data.list) ? data.list : [];
+  const risky = [];
+  const seenRisk = new Set();
+  let penalty = 0;
+  for (const row of rows) {
+    const title = String(row.report_nm || "");
+    const hit = disclosureRiskWeight(title);
+    if (!hit.weight) continue;
+    const dedupeKey = `${hit.category}:${title.replace(/\[[^\]]*정정[^\]]*\]|정정/g, "").replace(/\s+/g, "")}`;
+    if (seenRisk.has(dedupeKey)) continue;
+    seenRisk.add(dedupeKey);
+    penalty += hit.weight;
+    risky.push({ date: row.rcept_dt || null, title, category: hit.category, weight: hit.weight, receiptNo: row.rcept_no || null });
+  }
+  penalty = Math.min(20, penalty);
+  return { available: true, penalty, items: risky.slice(0, 12), corpCode: corp.corpCode, corpName: corp.corpName, message: risky.length ? "최근 1년 위험 공시 감지" : "최근 1년 주요 위험공시 미감지" };
+}
+
+function disclosureRiskWeight(title) {
+  const t = String(title || "").replace(/\s+/g, "");
+  const rules = [
+    [/횡령|배임|감사의견거절|상장폐지|파산|회생절차|부도|영업정지/, 10, "중대 리스크"],
+    [/감자결정|자본감소/, 7, "감자"],
+    [/유상증자결정|유무상증자결정/, 5, "유상증자"],
+    [/전환사채권발행|신주인수권부사채권발행|교환사채권발행/, 4, "메자닌·희석"],
+    [/최대주주변경|경영권분쟁/, 4, "지배구조"],
+    [/소송|과징금|벌금|압수수색/, 3, "법률 리스크"],
+  ];
+  for (const [re, weight, category] of rules) if (re.test(t)) return { weight, category };
+  return { weight: 0, category: null };
+}
+
+async function dartJson(url, label = "OpenDART") {
+  const res = await fetch(url, { redirect: "manual", headers: { accept: "application/json,*/*", "user-agent": "FF-Value-Hunter/1.0" } });
+  if ([301,302,303,307,308].includes(res.status)) throw new Error(`${label} 리디렉션 오류`);
+  const text = await res.text();
+  let data; try { data = JSON.parse(text); } catch { throw new Error(`${label} JSON 응답 아님`); }
+  if (!res.ok) throw new Error(`${label} HTTP ${res.status}: ${sanitizeText(data.message || "요청 실패")}`);
+  return data;
+}
+
+async function fetchNewsRisk(companyName) {
+  const riskTerms = "유상증자 OR 횡령 OR 배임 OR 구속 OR 압수수색 OR 경영권분쟁 OR 상장폐지 OR 영업정지 OR 회생절차 OR 감사의견";
+  const q = `\"${companyName}\" (${riskTerms})`;
+  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=ko&gl=KR&ceid=KR:ko`;
+  const res = await fetch(url, { headers: { "user-agent": "FF-Value-Hunter/1.0" } });
+  if (!res.ok) throw new Error(`뉴스 RSS HTTP ${res.status}`);
+  const xml = await res.text();
+  const items = [];
+  const re = /<item>([\s\S]*?)<\/item>/g;
+  let m;
+  while ((m = re.exec(xml)) && items.length < 12) {
+    const block = m[1];
+    const title = decodeXml((block.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || "").replace(/<!\[CDATA\[|\]\]>/g, "");
+    const pubDate = decodeXml((block.match(/<pubDate>([\s\S]*?)<\/pubDate>/) || [])[1] || "");
+    const link = decodeXml((block.match(/<link>([\s\S]*?)<\/link>/) || [])[1] || "");
+    if (title) items.push({ title, pubDate, link });
+  }
+  const severe = /횡령|배임|구속|상장폐지|회생절차|감사의견거절|영업정지/;
+  const medium = /유상증자|경영권분쟁|압수수색|과징금/;
+  let penalty = 0;
+  for (const it of items) { if (severe.test(it.title)) penalty += 3; else if (medium.test(it.title)) penalty += 1.5; }
+  penalty = Math.min(5, penalty);
+  return { available: true, penalty: round(penalty, 1), headlines: items.slice(0, 8), message: items.length ? "위험 키워드 뉴스 검색 결과 있음" : "위험 키워드 뉴스 미감지", note: "뉴스는 제목 기반 보조신호이며 오탐 가능성이 있어 공시보다 낮은 가중치를 적용합니다." };
+}
+
+async function unzipZipEntry(bytes, extension) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const u16 = (o) => view.getUint16(o, true), u32 = (o) => view.getUint32(o, true);
+  const EOCD = 0x06054b50, CENTRAL = 0x02014b50, LOCAL = 0x04034b50;
+  let eocd = -1;
+  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i--) { if (u32(i) === EOCD) { eocd = i; break; } }
+  if (eocd < 0) throw new Error("ZIP 중앙 디렉터리 없음");
+  const total = u16(eocd + 10); let pos = u32(eocd + 16); const dec = new TextDecoder("utf-8");
+  for (let i = 0; i < total; i++) {
+    if (pos + 46 > bytes.length || u32(pos) !== CENTRAL) break;
+    const method = u16(pos + 10), size = u32(pos + 20), nameLen = u16(pos + 28), extraLen = u16(pos + 30), commentLen = u16(pos + 32), local = u32(pos + 42);
+    const name = dec.decode(bytes.slice(pos + 46, pos + 46 + nameLen));
+    if (name.toLowerCase().endsWith(String(extension).toLowerCase())) {
+      if (u32(local) !== LOCAL) throw new Error("ZIP 로컬 헤더 오류");
+      const ln = u16(local + 26), le = u16(local + 28), start = local + 30 + ln + le;
+      const compressed = bytes.slice(start, start + size);
+      if (method === 0) return compressed;
+      if (method !== 8) throw new Error(`지원하지 않는 ZIP 압축 방식 ${method}`);
+      const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+    pos += 46 + nameLen + extraLen + commentLen;
+  }
+  throw new Error(`ZIP 안에 ${extension} 파일이 없습니다.`);
 }
 
 async function krxGet(env, path, basDd, label) {
@@ -1930,12 +2620,17 @@ function analyzeTechnical(rows) {
     return {
       date: row.date,
       close: round(row.close),
+      open: round(row.open),
+      high: round(row.high),
+      low: round(row.low),
       ma20: subset.length >= 20 ? round(sma(subset, 20)) : null,
       ma60: subset.length >= 60 ? round(sma(subset, 60)) : null,
       ma120: subset.length >= 120 ? round(sma(subset, 120)) : null,
       volume: round(row.volume),
     };
-  }).slice(-180);
+  }).slice(-270);
+  const yearAgo = clean[Math.max(0, clean.length - 253)]?.close;
+  const price1yChangePct = Number.isFinite(yearAgo) && yearAgo > 0 ? pct(last.close, yearAgo) : null;
 
   return {
     ok: true,
@@ -1952,6 +2647,7 @@ function analyzeTechnical(rows) {
     wavePass: aligned && rising,
     zone,
     closeVsMa120Pct: pct(last.close, ma120),
+    price1yChangePct: Number.isFinite(price1yChangePct) ? round(price1yChangePct, 2) : null,
     series,
     rule: "현재가 > MA20 > MA60 > MA120이며 MA60·MA120이 10거래일 전보다 상승하면 정배열 상승으로 판정",
   };
@@ -2048,6 +2744,80 @@ function analyzeSupply(investorRows, dailyRows) {
     daily: rows.slice(0, 30).reverse(),
     scoreRule: "하루 순매수보다 5·20·30일 누적, 순매수 지속일수, 외국인 보유비율 상승을 더 높게 평가",
   };
+}
+
+
+function analyzeAccumulation(technical, supply) {
+  const rows = (technical?.series || []).slice(-60);
+  if (!rows.length) return { score: Number(supply?.score || 0), label: supply?.label || "자료 부족", signals: [], penalties: [] };
+  const last20 = rows.slice(-20);
+  const last5 = rows.slice(-5);
+  const prev20 = rows.slice(-25, -5);
+  const avg20Volume = average(last20.map((x) => Number(x.volume)).filter(Number.isFinite));
+  const avg5Volume = average(last5.map((x) => Number(x.volume)).filter(Number.isFinite));
+  const prev20Volume = average(prev20.map((x) => Number(x.volume)).filter(Number.isFinite));
+  const closeNow = Number(rows.at(-1)?.close);
+  const close20Ago = Number(rows[Math.max(0, rows.length - 21)]?.close);
+  const price20 = Number.isFinite(closeNow) && Number.isFinite(close20Ago) && close20Ago > 0 ? ((closeNow - close20Ago) / close20Ago) * 100 : null;
+  const volumeRamp = Number.isFinite(avg5Volume) && Number.isFinite(prev20Volume) && prev20Volume > 0 ? (avg5Volume / prev20Volume) : null;
+  const supplyScore = Number(supply?.score || 0);
+  let score = supplyScore * 0.62;
+  const signals = [];
+  const penalties = [];
+
+  const foreign20 = Number(supply?.foreign?.net20d || 0);
+  const inst20 = Number(supply?.institution?.net20d || 0);
+  const bothBuying = foreign20 > 0 && inst20 > 0;
+  if (bothBuying) { score += 8; signals.push("외국인·기관 20일 동반 순매수"); }
+  if (Number(supply?.foreign?.exhaustionRateDelta30d) > 0) { score += 6; signals.push("외국인 보유비율 상승"); }
+
+  // 가격이 크게 오르지 않았는데 수급이 쌓이는 경우를 '조용한 매집 후보'로 봅니다.
+  if (bothBuying && Number.isFinite(price20) && price20 > -8 && price20 < 8) {
+    score += 10; signals.push("가격 횡보권에서 외국인·기관 누적매수");
+  }
+  // 상승하는데 거래량이 줄고 수급이 플러스면 매도물량 감소(공급 건조) 후보로 봅니다.
+  if ((foreign20 > 0 || inst20 > 0) && Number.isFinite(price20) && price20 > 0 && Number.isFinite(avg5Volume) && Number.isFinite(avg20Volume) && avg20Volume > 0 && avg5Volume < avg20Volume * 0.85) {
+    score += 7; signals.push("상승 중 거래량 감소 + 수급 양호 (공급 감소 후보)");
+  }
+  // 거래량이 점진적으로 증가하면서 수급도 동행하는 경우 확인 가점.
+  if ((foreign20 > 0 || inst20 > 0) && Number.isFinite(volumeRamp) && volumeRamp >= 1.2 && volumeRamp <= 2.8) {
+    score += 7; signals.push(`최근 거래량 증가 ${round(volumeRamp, 2)}배`);
+  }
+
+  // 고거래량 윗꼬리/종가 약세는 분배 가능성 페널티. '세력'을 단정하지 않고 경고 신호로만 사용합니다.
+  let distributionDays = 0;
+  for (const row of last20) {
+    const high = Number(row.high), low = Number(row.low), close = Number(row.close), open = Number(row.open), vol = Number(row.volume);
+    if (![high, low, close, open, vol].every(Number.isFinite) || high <= low || !(avg20Volume > 0)) continue;
+    const closePos = (close - low) / (high - low);
+    const upperWick = high - Math.max(open, close);
+    const bodyRange = high - low;
+    if (vol > avg20Volume * 1.45 && closePos < 0.45 && upperWick / bodyRange > 0.35) distributionDays++;
+  }
+  if (distributionDays >= 2) {
+    const pen = Math.min(14, distributionDays * 4);
+    score -= pen; penalties.push(`고거래량 윗꼬리·종가약세 ${distributionDays}일 (-${pen})`);
+  }
+
+  score = Math.max(0, Math.min(100, score));
+  let label = "관찰";
+  if (score >= 82) label = "강한 누적매집 후보";
+  else if (score >= 68) label = "매집 우위";
+  else if (score < 45) label = "수급 약함";
+  return {
+    score: round(score, 1), label, signals, penalties,
+    price20dPct: Number.isFinite(price20) ? round(price20, 2) : null,
+    avgVolume5: Number.isFinite(avg5Volume) ? round(avg5Volume) : null,
+    avgVolume20: Number.isFinite(avg20Volume) ? round(avg20Volume) : null,
+    volumeRampRatio: Number.isFinite(volumeRamp) ? round(volumeRamp, 2) : null,
+    distributionDays20: distributionDays,
+    note: "외국인·기관 지속순매수, 외국인 보유비율, 가격-거래량 조합을 함께 평가합니다. 특정 주체의 의도를 단정하지 않는 보조 신호입니다.",
+  };
+}
+
+function average(values) {
+  const a = (values || []).map(Number).filter(Number.isFinite);
+  return a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
 }
 
 function buildFinance(annualRows, quarterRows, ratioRows, fiscalMonth = "12") {
