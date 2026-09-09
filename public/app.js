@@ -72,7 +72,7 @@ function drawCards() {
 drawCards();
 
 // -----------------------------
-// v0.7 산업 → 기업 발굴 흐름
+// v0.8 산업 → 저평가 우량주 발굴 흐름
 // -----------------------------
 const sectorGrid = $("sectorGrid");
 const sectorEmpty = $("sectorEmpty");
@@ -506,11 +506,15 @@ function renderMembers() {
       const ar = a.rank;
       const br = b.rank;
       if (ar && br) {
-        if (br.score !== ar.score) return br.score - ar.score;
-        if (br.revenueGrowing3y !== ar.revenueGrowing3y) return Number(br.revenueGrowing3y) - Number(ar.revenueGrowing3y);
-        const ad = Number.isFinite(Number(ar.debtRatio)) ? Number(ar.debtRatio) : 999999;
-        const bd = Number.isFinite(Number(br.debtRatio)) ? Number(br.debtRatio) : 999999;
-        if (ad !== bd) return ad - bd;
+        const as = Number(ar.finalScore ?? ar.score ?? -1);
+        const bs = Number(br.finalScore ?? br.score ?? -1);
+        if (bs !== as) return bs - as;
+        const av = Number(ar.valueScore ?? -1);
+        const bv = Number(br.valueScore ?? -1);
+        if (bv !== av) return bv - av;
+        const aq = Number(ar.qualityScore ?? ar.score ?? -1);
+        const bq = Number(br.qualityScore ?? br.score ?? -1);
+        if (bq !== aq) return bq - aq;
       }
       if (br && !ar) return 1;
       if (ar && !br) return -1;
@@ -527,31 +531,43 @@ function memberCardHtml(m, displayRank) {
   const r = m.rank;
   const annual = r?.annual || [];
   const latest = annual[0] || {};
-  const gradeClass = r?.grade === "S" || String(r?.grade || "").startsWith("A") ? "good" : r?.grade === "B" ? "warn" : "neutral";
+  const score = Number(r?.finalScore ?? r?.score);
+  const grade = r?.finalGrade || r?.grade || "-";
+  const gradeClass = grade === "S" || String(grade).startsWith("A") ? "good" : grade === "B" ? "warn" : "neutral";
   const revenueText = !r ? "분석 전" : r.revenueGrowing3y ? `3년 연속 상승 · CAGR ${fmt1(r.revenueCagr)}%` : annual.length >= 2 ? `${r.revenueTransitions || 0}/2 구간 상승 · CAGR ${fmt1(r.revenueCagr)}%` : "자료 부족";
-  const opText = !r ? (isFiniteValue(m.operatingIncome) ? shortNumber(m.operatingIncome) : "-") : r.operatingProfitPositive3y ? "3년 연속 흑자" : isFiniteValue(latest.operatingIncome) ? shortNumber(latest.operatingIncome) : "확인 필요";
   const krxCapWon = Number(m.krx?.marketCapWon);
   const cap = Number.isFinite(krxCapWon) && krxCapWon > 0 ? `${fmt(Math.round(krxCapWon / 100000000))}억` : (isFiniteValue(m.marketCap) ? `${fmt(m.marketCap)}억` : "-");
-  const qualityHit = r?.revenueGrowing3y && Number(r.debtRatio) < 150;
+  const qualityHit = r && Number(r.qualityScore ?? r.score) >= 65 && Number(r.debtRatio) < 150;
   const englishName = m.krx?.englishName || m.englishName || "";
   const english = englishName ? `<span>${escapeHtml(englishName)}</span>` : "";
   const krxMove = Number(m.krx?.dayPct);
   const krxChip = Number.isFinite(krxMove) ? `<span class="krx-move ${signClass(krxMove)}">KRX ${signedPctPlain(krxMove)}</span>` : "";
+  const v = r?.valuation || {};
+  const discount = r?.fairValue?.discountPct;
+  const fairText = Number.isFinite(Number(discount)) ? `${Number(discount) >= 0 ? "+" : ""}${fmt1(discount)}%` : "-";
+  const position52 = Number.isFinite(Number(v.position52)) ? `${fmt1(v.position52)}%` : "-";
+  const trap = Array.isArray(r?.valueTrapWarnings) && r.valueTrapWarnings.length ? `<div class="value-warning">⚠ ${escapeHtml(r.valueTrapWarnings.slice(0, 2).join(" · "))}</div>` : "";
+  const target = r?.analystTarget;
+  const targetText = target?.targetPrice ? `<span class="analyst-chip">목표가 ${fmt(target.targetPrice)}원 · ${signedPctPlain(target.upsidePct)}</span>` : "";
   return `
     <article class="company-card ${qualityHit ? "quality-hit" : ""}">
       <div class="company-card-top">
         <span class="rank-no">${displayRank}</span>
         <div class="company-name"><b>${escapeHtml(m.name)}</b>${english}<small>${escapeHtml(m.code)} · ${escapeHtml(m.market)} · 시총 ${cap} ${krxChip}</small></div>
-        <div class="grade-box">${r ? `<span class="grade-badge ${gradeClass}">${escapeHtml(r.grade)}</span><span class="grade-score">${fmt1(r.score)}</span>` : `<span class="analysis-wait">분석 전</span>`}</div>
+        <div class="grade-box">${r ? `<span class="grade-badge ${gradeClass}">${escapeHtml(grade)}</span><span class="grade-score">${Number.isFinite(score) ? fmt1(score) : "-"}</span>` : `<span class="analysis-wait">분석 전</span>`}</div>
       </div>
-      <div class="company-metrics">
+      <div class="company-metrics value-metrics">
+        <div class="company-metric highlight"><small>FF 저평가 우량</small><b>${r?.finalScore != null ? `${fmt1(r.finalScore)}점` : "분석 필요"}</b></div>
+        <div class="company-metric"><small>Quality</small><b>${r ? `${fmt1(r.qualityScore ?? r.score)}/100` : "-"}</b></div>
+        <div class="company-metric"><small>Value</small><b class="${Number(r?.valueScore) >= 70 ? "pos" : ""}">${r?.valueScore != null ? `${fmt1(r.valueScore)}/100` : "-"}</b></div>
+        <div class="company-metric"><small>참고 적정가 할인</small><b class="${Number(discount) > 0 ? "pos" : Number.isFinite(Number(discount)) ? "neg" : "neutral"}">${fairText}</b></div>
+        <div class="company-metric"><small>52주 저가→고가 위치</small><b class="${Number(v.position52) <= 35 ? "pos" : Number(v.position52) >= 75 ? "neg" : ""}">${position52}</b></div>
+        <div class="company-metric"><small>PER / PBR</small><b>${fmt2(v.per)} / ${fmt2(v.pbr)}</b></div>
+        <div class="company-metric"><small>ROE / 부채</small><b>${fmtPct(r?.roe)} / ${fmtPct(r?.debtRatio)}</b></div>
         <div class="company-metric"><small>3년 매출</small><b class="${r?.revenueGrowing3y ? "pos" : "neutral"}">${escapeHtml(revenueText)}</b></div>
-        <div class="company-metric"><small>부채비율</small><b class="${r && Number(r.debtRatio) < 150 ? "pos" : r?.debtRatio != null ? "neg" : "neutral"}">${r ? fmtPct(r.debtRatio) : "-"}</b></div>
-        <div class="company-metric"><small>유보율</small><b>${r ? fmtPct(r.reserveRatio) : "-"}</b></div>
-        <div class="company-metric"><small>ROE</small><b class="${signClass(r?.roe)}">${r ? fmtPct(r.roe) : (isFiniteValue(m.roe) ? fmtPct(m.roe) : "-")}</b></div>
-        <div class="company-metric"><small>영업이익</small><b class="${r?.operatingProfitPositive3y ? "pos" : "neutral"}">${escapeHtml(opText)}</b></div>
-        <div class="company-metric"><small>FF 기업질</small><b>${r ? `${escapeHtml(r.grade)} · ${fmt1(r.score)}점` : "분석 필요"}</b></div>
       </div>
+      ${targetText ? `<div class="analyst-row">${targetText}</div>` : ""}
+      ${trap}
       <div class="company-actions">
         <a class="mini-link npay" href="${npayUrl(m.code)}" target="_blank" rel="noopener noreferrer">Npay 차트 ↗</a>
         <button class="mini-button" data-stock-detail="${escapeHtml(m.code)}" data-stock-name="${escapeHtml(m.name)}" data-stock-market="${escapeHtml(m.market)}" data-stock-english="${escapeHtml(englishName)}">FF 상세분석</button>
@@ -563,10 +579,14 @@ async function rankSelectedSectorMembers() {
   if (!sectorState.selected || !sectorState.members.length) return;
   const btn = $("rankMembers");
   btn.disabled = true;
-  const candidates = sectorState.members.slice(0, 60); // 관련주는 전부 표시, 재무 API 정밀분석은 대형주부터 최대 60개
+  sectorState.rankings.clear();
+  renderMembers();
+
+  // 대형주만 분석되는 편향을 줄이기 위해 대·중·소형 구간을 고르게 뽑습니다.
+  const candidates = selectDiverseCandidates(sectorState.members, 72);
   let completed = 0;
   let errors = 0;
-  setRankProgress(`우량순 분석 시작 · 시가총액 상위 ${candidates.length}개 기업을 순차 분석합니다.`, true);
+  setRankProgress(`저평가 우량주 분석 시작 · 대·중·소형주를 고르게 ${candidates.length}개 추출했습니다. Quality와 밸류에이션 데이터를 순차 분석합니다.`, true);
 
   for (let i = 0; i < candidates.length; i += 6) {
     const batch = candidates.slice(i, i + 6);
@@ -578,15 +598,208 @@ async function rankSelectedSectorMembers() {
     } catch (error) {
       errors += batch.length;
     }
-    setRankProgress(`매출·안정성 분석 ${Math.min(i + batch.length, candidates.length)}/${candidates.length} · 완료 후 자동으로 우량순 재정렬됩니다.`, true);
+    setRankProgress(`Quality·Value 원자료 ${Math.min(i + batch.length, candidates.length)}/${candidates.length} · PER·PBR·ROE·52주 위치·실적·안정성 수집 중`, true);
     renderMembers();
-    await sleep(650);
+    await sleep(520);
   }
 
-  const qualityHits = [...sectorState.rankings.values()].filter((r) => r.revenueGrowing3y && Number(r.debtRatio) < 150).length;
-  setRankProgress(`우량순 분석 완료 · ${completed}개 분석${errors ? ` · ${errors}개 오류` : ""} · 3년 매출 우상향 + 부채비율 150% 미만 ${qualityHits}개`, true);
+  const analyzed = [...sectorState.rankings.values()];
+  const scored = applySectorValueScores(analyzed);
+  for (const item of scored) sectorState.rankings.set(item.code, item);
+  renderMembers();
+
+  // 증권사 목표가는 커버리지 편향이 있으므로 상위 후보에만 보조가점(최대 +4)을 적용합니다.
+  const topForOpinion = [...scored]
+    .filter((x) => Number.isFinite(Number(x.finalScore)))
+    .sort((a, b) => b.finalScore - a.finalScore)
+    .slice(0, 8);
+  for (let i = 0; i < topForOpinion.length; i++) {
+    const item = topForOpinion[i];
+    try {
+      setRankProgress(`최종 보조검증 ${i + 1}/${topForOpinion.length} · ${item.code} 증권사 목표가 확인 중`, true);
+      const data = await api(`/api/target-opinion?code=${encodeURIComponent(item.code)}`);
+      if (data.latest?.targetPrice && Number(item.valuation?.price) > 0) {
+        const upsidePct = ((Number(data.latest.targetPrice) - Number(item.valuation.price)) / Number(item.valuation.price)) * 100;
+        const bonus = targetPriceBonus(upsidePct);
+        item.analystTarget = { ...data.latest, upsidePct: roundClient(upsidePct, 1), bonus };
+        item.finalScore = roundClient(Math.min(100, Number(item.baseFinalScore || item.finalScore) + bonus), 1);
+        item.finalGrade = gradeFromScoreClient(item.finalScore);
+        sectorState.rankings.set(item.code, item);
+      }
+    } catch (_) {
+      // 목표가 데이터가 없어도 핵심 점수에는 영향이 없습니다.
+    }
+    await sleep(480);
+  }
+
+  const finalItems = [...sectorState.rankings.values()];
+  const strong = finalItems.filter((r) => Number(r.finalScore) >= 75 && Number(r.qualityScore) >= 65).length;
+  const bargains = finalItems.filter((r) => Number(r.fairValue?.discountPct) >= 15 && Number(r.qualityScore) >= 65).length;
+  setRankProgress(`분석 완료 · ${completed}개 분석${errors ? ` · ${errors}개 오류` : ""} · FF 75점 이상 ${strong}개 · Quality 65+ & 참고 적정가 15% 이상 할인 ${bargains}개`, true);
   renderMembers();
   btn.disabled = false;
+}
+
+function selectDiverseCandidates(members, limit = 72) {
+  const rows = [...(members || [])];
+  if (rows.length <= limit) return rows;
+  rows.sort((a, b) => marketCapWon(b) - marketCapWon(a));
+  const thirds = [
+    rows.slice(0, Math.ceil(rows.length / 3)),
+    rows.slice(Math.ceil(rows.length / 3), Math.ceil(rows.length * 2 / 3)),
+    rows.slice(Math.ceil(rows.length * 2 / 3)),
+  ];
+  const each = Math.floor(limit / 3);
+  const selected = [];
+  for (const group of thirds) selected.push(...evenSample(group, each));
+  const used = new Set(selected.map((x) => x.code));
+  for (const item of rows) {
+    if (selected.length >= limit) break;
+    if (!used.has(item.code)) { selected.push(item); used.add(item.code); }
+  }
+  return selected;
+}
+
+function evenSample(rows, count) {
+  if (rows.length <= count) return [...rows];
+  if (count <= 1) return [rows[Math.floor(rows.length / 2)]];
+  const out = [];
+  const used = new Set();
+  for (let i = 0; i < count; i++) {
+    const idx = Math.round(i * (rows.length - 1) / (count - 1));
+    if (!used.has(idx)) { out.push(rows[idx]); used.add(idx); }
+  }
+  return out;
+}
+
+function marketCapWon(item) {
+  const krx = Number(item?.krx?.marketCapWon);
+  if (Number.isFinite(krx) && krx > 0) return krx;
+  const master = Number(item?.marketCap);
+  return Number.isFinite(master) ? master * 100000000 : 0;
+}
+
+function applySectorValueScores(items) {
+  const rows = items.map((x) => ({ ...x, valuation: { ...(x.valuation || {}) } }));
+  const pers = rows.map((x) => Number(x.valuation.per)).filter((x) => x > 0 && x < 300);
+  const pbrs = rows.map((x) => Number(x.valuation.pbr)).filter((x) => x > 0 && x < 30);
+  const pbrRoes = rows.map((x) => Number(x.valuation.pbrToRoe)).filter((x) => x > 0 && x < 10);
+  const medianPer = medianClient(pers);
+  const medianPbrRoe = medianClient(pbrRoes);
+
+  return rows.map((item) => {
+    const q = Number(item.qualityScore ?? item.score ?? 0);
+    const v = item.valuation || {};
+    const price = Number(v.price);
+    const fairModels = [];
+    if (Number(v.grahamFair) > 0) fairModels.push({ name: "Graham", price: Number(v.grahamFair) });
+    if (Number.isFinite(medianPer) && medianPer > 0 && Number(v.eps) > 0) fairModels.push({ name: "섹터 PER", price: medianPer * Number(v.eps) });
+    if (Number.isFinite(medianPbrRoe) && medianPbrRoe > 0 && Number(item.roe) > 0 && Number(v.bps) > 0) {
+      fairModels.push({ name: "섹터 PBR/ROE", price: medianPbrRoe * Number(item.roe) * Number(v.bps) });
+    }
+    const fairPrice = medianClient(fairModels.map((x) => x.price).filter((x) => x > 0));
+    const discountPct = Number.isFinite(fairPrice) && fairPrice > 0 && price > 0 ? ((fairPrice - price) / fairPrice) * 100 : null;
+
+    const fairScore = Number.isFinite(discountPct) ? linearScore(discountPct, -30, 55, 30) : 8;
+    const qualityFactor = q >= 72 ? 1 : q >= 60 ? 0.72 : q >= 50 ? 0.45 : 0.25;
+    const position = Number(v.position52);
+    let low52Score = Number.isFinite(position) ? Math.max(0, Math.min(20, 20 * (1 - position / 100))) : 6;
+    low52Score *= qualityFactor;
+    if (Number(item.roe) <= 0) low52Score *= 0.2;
+    if (Number(item.debtRatio) >= 200) low52Score *= 0.5;
+
+    const pbrRoeScore = Number(v.pbrToRoe) > 0 ? lowIsGoodPercentile(Number(v.pbrToRoe), pbrRoes) * 20 : 4;
+    const perScore = Number(v.per) > 0 ? lowIsGoodPercentile(Number(v.per), pers) * 15 : 0;
+    let pbrScore = Number(v.pbr) > 0 ? lowIsGoodPercentile(Number(v.pbr), pbrs) * 10 : 2;
+    if (Number(item.roe) <= 0) pbrScore *= 0.2;
+    else if (Number(item.roe) < 5) pbrScore *= 0.55;
+    const earningsYieldScore = Number(v.earningsYield) > 0 ? Math.max(0, Math.min(5, Number(v.earningsYield) / 12 * 5)) : 0;
+
+    const warnings = [...(item.valueTrapWarnings || [])];
+    let trapPenalty = Math.min(16, warnings.length * 4);
+    if (Number.isFinite(position) && position <= 20 && q < 55) {
+      warnings.push("52주 저가 근접이나 Quality 낮음");
+      trapPenalty = Math.min(18, trapPenalty + 4);
+    }
+    const rawValue = fairScore + low52Score + pbrRoeScore + perScore + pbrScore + earningsYieldScore;
+    const valueScore = roundClient(Math.max(0, Math.min(100, rawValue - trapPenalty)), 1);
+    const baseFinalScore = roundClient(Math.max(0, Math.min(100, q * 0.45 + valueScore * 0.55)), 1);
+
+    item.valueScore = valueScore;
+    item.baseFinalScore = baseFinalScore;
+    item.finalScore = baseFinalScore;
+    item.finalGrade = gradeFromScoreClient(baseFinalScore);
+    item.grade = item.finalGrade;
+    item.score = baseFinalScore;
+    item.valueTrapWarnings = [...new Set(warnings)];
+    item.fairValue = {
+      fairPrice: Number.isFinite(fairPrice) ? Math.round(fairPrice) : null,
+      discountPct: Number.isFinite(discountPct) ? roundClient(discountPct, 1) : null,
+      confidence: fairModels.length >= 3 ? "높음" : fairModels.length === 2 ? "보통" : fairModels.length === 1 ? "낮음" : "자료 부족",
+      modelCount: fairModels.length,
+      models: fairModels.map((x) => ({ name: x.name, price: Math.round(x.price) })),
+      sectorMedianPer: Number.isFinite(medianPer) ? roundClient(medianPer, 2) : null,
+      sectorMedianPbrRoe: Number.isFinite(medianPbrRoe) ? roundClient(medianPbrRoe, 4) : null,
+    };
+    item.valueBreakdown = {
+      fairDiscount: roundClient(fairScore, 1),
+      week52Position: roundClient(low52Score, 1),
+      pbrRoeRelative: roundClient(pbrRoeScore, 1),
+      perRelative: roundClient(perScore, 1),
+      pbrRelative: roundClient(pbrScore, 1),
+      earningsYield: roundClient(earningsYieldScore, 1),
+      trapPenalty: roundClient(trapPenalty, 1),
+    };
+    return item;
+  });
+}
+
+function medianClient(values) {
+  const a = (values || []).map(Number).filter(Number.isFinite).sort((x, y) => x - y);
+  if (!a.length) return null;
+  const mid = Math.floor(a.length / 2);
+  return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
+}
+
+function lowIsGoodPercentile(value, values) {
+  const a = (values || []).map(Number).filter(Number.isFinite).sort((x, y) => x - y);
+  if (!a.length || !Number.isFinite(value)) return 0.3;
+  if (a.length === 1) return 0.5;
+  let below = 0;
+  for (const x of a) if (x < value) below += 1;
+  return Math.max(0, Math.min(1, 1 - below / (a.length - 1)));
+}
+
+function linearScore(value, low, high, maxScore) {
+  if (!Number.isFinite(Number(value))) return 0;
+  const t = Math.max(0, Math.min(1, (Number(value) - low) / (high - low)));
+  return t * maxScore;
+}
+
+function targetPriceBonus(upsidePct) {
+  const x = Number(upsidePct);
+  if (!Number.isFinite(x) || x <= 10) return 0;
+  if (x >= 50) return 4;
+  if (x >= 35) return 3;
+  if (x >= 20) return 2;
+  return 1;
+}
+
+function gradeFromScoreClient(score) {
+  const n = Number(score);
+  if (!Number.isFinite(n)) return "-";
+  if (n >= 88) return "S";
+  if (n >= 80) return "A+";
+  if (n >= 72) return "A";
+  if (n >= 62) return "B";
+  return "C";
+}
+
+function roundClient(value, digits = 1) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  const p = 10 ** digits;
+  return Math.round(n * p) / p;
 }
 
 function drawSectorChart(canvas, rows) {
@@ -742,6 +955,7 @@ $("analyze").addEventListener("click", async () => {
     const q = new URLSearchParams({ code });
     if (corp) q.set("corp", corp);
     const data = await api(`/api/analyze?${q}`);
+    data.rankContext = sectorState.rankings.get(code) || null;
     lastAnalysis = data;
     renderResult(data);
   } catch (e) {
@@ -774,6 +988,7 @@ function renderResult(d) {
   const sourceErrors = Array.isArray(d.sourceErrors) ? d.sourceErrors : [];
   const companyName = identity.name || snap.name || d.code;
   const sectorText = identity.sector || snap.industry || identity.industryStandard || "업종정보 확인 중";
+  const rankCtx = d.rankContext || sectorState.rankings.get(d.code) || null;
   setSelectedStock({ code: d.code, name: companyName, market: identity.market || "", englishName: identity.englishName || selectedStockEnglish?.textContent || "" });
 
   result.innerHTML = `
@@ -798,14 +1013,27 @@ function renderResult(d) {
     ` : ""}
 
     <div class="result-grid">
+      ${rankCtx ? `
+      <div class="metric value-summary-metric">
+        <h3>FF 저평가 우량</h3>
+        <div class="big ${Number(rankCtx.finalScore) >= 75 ? "good" : Number(rankCtx.finalScore) >= 62 ? "warn" : "neutral"}">${fmt1(rankCtx.finalScore)}/100</div>
+        <div class="kv">
+          <span>Quality</span><span>${fmt1(rankCtx.qualityScore)}/100</span>
+          <span>Value</span><span>${fmt1(rankCtx.valueScore)}/100</span>
+          <span>FF 참고 적정가</span><span>${rankCtx.fairValue?.fairPrice ? `${fmt(rankCtx.fairValue.fairPrice)}원` : "-"}</span>
+          <span>현재가 대비</span><span class="${Number(rankCtx.fairValue?.discountPct) > 0 ? "pos" : "neg"}">${rankCtx.fairValue?.discountPct == null ? "-" : `${signedPctPlain(rankCtx.fairValue.discountPct)}`}</span>
+        </div>
+      </div>` : ""}
       <div class="metric">
         <h3>시장 스냅샷</h3>
         <div class="big">${fmt(snap.price)}원</div>
         <div class="kv">
           <span>PER</span><span>${fmt2(snap.per)}</span>
           <span>PBR</span><span>${fmt2(snap.pbr)}</span>
+          <span>52주 위치</span><span>${snap.position52 == null ? "-" : `${fmt1(snap.position52)}%`}</span>
+          <span>52주 고가</span><span>${fmt(snap.high52)}</span>
+          <span>52주 저가</span><span>${fmt(snap.low52)}</span>
           <span>시가총액</span><span>${snap.marketCap100MKRW == null ? "-" : `${fmt(snap.marketCap100MKRW)}억원`}</span>
-          <span>외국인 보유수량</span><span>${fmt(snap.foreignHoldingQty)}</span>
         </div>
       </div>
 

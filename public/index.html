@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="color-scheme" content="light" />
   <meta name="theme-color" content="#0b1f3a" />
-  <title>FF Value Hunter · 산업부터 찾는 가치투자 스캐너</title>
+  <title>FF Value Hunter · 저평가 우량주 스캐너</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -37,7 +37,7 @@
         <div class="hero-trust">
           <span>자동매수·매도 없음</span>
           <span>기업 선별 보조도구</span>
-          <span>v0.7</span>
+          <span>v0.8</span>
         </div>
       </div>
 
@@ -139,7 +139,7 @@
           <h2 id="sectorTitle">선택 섹터</h2>
           <p id="sectorSubtitle">관련기업을 불러오는 중입니다.</p>
         </div>
-        <button id="rankMembers" class="primary-button">우량기업 순으로 정렬</button>
+        <button id="rankMembers" class="primary-button">저평가 우량주 분석</button>
       </div>
 
       <div id="sectorTrendSummary" class="sector-trend-summary"></div>
@@ -157,7 +157,7 @@
       </details>
 
       <div class="member-head">
-        <div><b id="memberCount">관련기업 -</b><small>처음엔 시가총액 순 · 분석 후 매출과 안정성 중심으로 재정렬</small></div>
+        <div><b id="memberCount">관련기업 -</b><small>처음엔 시장 기본순 · 분석 후 Quality + Value 중심으로 재정렬</small></div>
         <div class="search-shell compact-search">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z"/></svg>
           <input id="memberSearch" placeholder="이 섹터 안에서 기업 검색" />
@@ -167,7 +167,7 @@
       <div id="memberGrid" class="company-grid"></div>
       <div class="method-card">
         <div class="method-icon">FF</div>
-        <div><b>우량기업 점수는 이렇게 계산합니다.</b><p>3개년 매출 우상향 30점 + 영업이익 안정성 20점 + 부채비율 20점 + 유보율 10점 + ROE 10점 + 영업이익률 10점</p></div>
+        <div><b>FF 저평가 우량점수</b><p><b>Quality 45%</b>: 매출·영업이익 추세, 부채비율, 유보율, ROE, 영업이익률 · <b>Value 55%</b>: 적정가 대비 할인, 52주 저가 위치, 섹터 상대 PER·PBR, PBR/ROE, 이익수익률. 증권사 목표가는 최대 +4점 보조가점만 적용합니다.</p></div>
       </div>
     </section>
 
@@ -242,7 +242,7 @@
 
     <footer>
       <div class="brand footer-brand"><span class="brand-mark">FF</span><span class="brand-copy"><b>Value Hunter</b><small>산업 → 기업 → 수급 → 가격</small></span></div>
-      <p>기업 선별을 돕는 개인용 가치투자 도구 · 자동주문 기능 없음 · 시장 데이터 일부는 KRX 통계정보 활용 · v0.7</p>
+      <p>기업 선별을 돕는 개인용 가치투자 도구 · 자동주문 기능 없음 · 시장 데이터 일부는 KRX 통계정보 활용 · v0.8</p>
     </footer>
   </main>
   <script src="/app.js" type="module"></script>

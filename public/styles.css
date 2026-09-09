@@ -428,9 +428,48 @@ footer p { margin: 0; font-size: 9px; }
   .trend-breakdown { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
 
-/* v0.7 · 산업-기업 매핑/시장데이터 보완 */
+/* v0.8 · 산업-기업 매핑/시장데이터 보완 */
 .sector-member-count{margin:-2px 0 7px;color:#7b879a;font-size:11px;font-weight:800}
 .krx-move{display:inline-flex;margin-left:6px;padding:2px 6px;border-radius:999px;background:#eef3f9;font-size:10px;font-weight:900;vertical-align:middle}
 .krx-move.pos{color:#087c4b;background:#eaf7f1}
 .krx-move.neg{color:#c0362c;background:#fff0ee}
 .krx-move.neutral{color:#667085}
+
+/* v0.8 · 저평가 우량주 Quality + Value */
+.company-metric.highlight {
+  background: linear-gradient(135deg, #edf8f3 0%, #f4f8ff 100%);
+  border: 1px solid #d6eadf;
+}
+.company-metric.highlight b { color: #0d7a55; font-size: 13px; }
+.value-warning {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: #fff7e8;
+  border: 1px solid #f2dfb3;
+  color: #885d08;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+.analyst-row { margin-top: 9px; }
+.analyst-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 8px;
+  border-radius: 999px;
+  background: #f0f4ff;
+  color: #355b9f;
+  border: 1px solid #d9e3fb;
+  font-size: 9px;
+  font-weight: 850;
+}
+.value-summary-metric {
+  background: linear-gradient(145deg, #f6fbf9 0%, #f5f8ff 100%);
+  border-color: #cfdfd8;
+}
+.value-metrics .company-metric b { letter-spacing: -.01em; }
+@media (max-width: 520px) {
+  .value-warning { font-size: 9px; }
+}

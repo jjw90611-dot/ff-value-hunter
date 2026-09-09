@@ -2,12 +2,12 @@ const KIS_BASE = "https://openapi.koreainvestment.com:9443";
 const DART_BASE = "https://opendart.fss.or.kr/api";
 const KRX_BASE = "https://data-dbg.krx.co.kr/svc/apis";
 const ECOS_BASE = "https://ecos.bok.or.kr/api";
-const APP_VERSION = "0.7.0";
+const APP_VERSION = "0.8.0";
 const MASTER_BASE = "https://new.real.download.dws.co.kr/common/master";
-const UNIVERSE_CACHE_URL = "https://ff-value-hunter-cache.local/stock-universe-v7";
-const SECTOR_TREND_CACHE_PREFIX = "https://ff-value-hunter-cache.local/sector-trend-v7/";
-const KRX_MARKET_CACHE_URL = "https://ff-value-hunter-cache.local/krx-market-v7";
-const KRX_FAILURE_CACHE_URL = "https://ff-value-hunter-cache.local/krx-failure-v7";
+const UNIVERSE_CACHE_URL = "https://ff-value-hunter-cache.local/stock-universe-v8";
+const SECTOR_TREND_CACHE_PREFIX = "https://ff-value-hunter-cache.local/sector-trend-v8/";
+const KRX_MARKET_CACHE_URL = "https://ff-value-hunter-cache.local/krx-market-v8";
+const KRX_FAILURE_CACHE_URL = "https://ff-value-hunter-cache.local/krx-failure-v8";
 const KIS_MIN_INTERVAL_MS = 450;
 const KIS_TOKEN_CACHE_URL = "https://ff-value-hunter-token-cache.local/kis-access-token-v3";
 
@@ -162,7 +162,7 @@ export default {
       if (url.pathname === "/api/sectors") {
         requireEnv(env, ["KIS_APP_KEY", "KIS_APP_SECRET"]);
 
-        // v0.7 핵심 수정:
+        // v0.8 기반 유지:
         // KOSPI는 3=산업별구분을 우선 사용합니다. KOSDAQ의 3은 '일반구분'이라
         // 실제 산업 목록이 충분하지 않을 수 있어, 매핑 결과가 적으면 전업종(0)을
         // 다시 받아 '종목 마스터 대분류 코드가 실제로 존재하는 항목'만 남깁니다.
@@ -228,7 +228,7 @@ export default {
             universeCount: universe.length,
             fallbackUsed,
           },
-          note: "v0.7은 실제 상장기업이 1개 이상 정확히 매핑되는 산업 섹터만 화면에 노출합니다. 특수지수/파생지수/구성기업 0개 항목은 자동 제외합니다.",
+          note: "v0.8은 실제 상장기업이 1개 이상 정확히 매핑되는 산업 섹터만 화면에 노출합니다. 특수지수/파생지수/구성기업 0개 항목은 자동 제외합니다.",
         });
       }
 
@@ -324,11 +324,44 @@ export default {
         }
         const items = [];
         for (const code of codes) {
+          // v0.8: 절대 매출/영업이익 규모가 아니라 Quality + Value를 계산하기 위해
+          // 손익, 재무비율, 현재 밸류에이션을 순차적으로 수집합니다.
           const annualRes = await safeSource("연간 손익", () => kisIncomeStatement(env, code, "0"));
           const ratioRes = await safeSource("재무비율", () => kisFinancialRatio(env, code, "0"));
-          items.push(buildStockRankItem(code, annualRes.value?.output || [], ratioRes.value?.output || [], [annualRes, ratioRes]));
+          const priceRes = await safeSource("현재 밸류에이션", () => kisCurrentPrice(env, code));
+          items.push(buildStockRankItem(
+            code,
+            annualRes.value?.output || [],
+            ratioRes.value?.output || [],
+            priceRes.value?.output || {},
+            [annualRes, ratioRes, priceRes]
+          ));
         }
-        return json({ ok: true, items });
+        return json({ ok: true, items, scoringVersion: "quality-value-v8" });
+      }
+
+      if (url.pathname === "/api/target-opinion") {
+        requireEnv(env, ["KIS_APP_KEY", "KIS_APP_SECRET"]);
+        const code = normalizeCode(url.searchParams.get("code") || "005930");
+        const end = new Date();
+        const start = new Date(end);
+        start.setUTCDate(start.getUTCDate() - 240);
+        try {
+          const raw = await kisInvestOpinion(env, code, yyyymmdd(start), yyyymmdd(end));
+          const rows = Array.isArray(raw?.output) ? raw.output : raw?.output ? [raw.output] : [];
+          const normalized = rows
+            .map((r) => ({
+              date: String(r.stck_bsop_date || ""),
+              opinion: String(r.invt_opnn || "").trim() || null,
+              targetPrice: numOrNull(r.hts_goal_prc),
+              priorClose: numOrNull(r.stck_prdy_clpr),
+            }))
+            .filter((r) => Number.isFinite(r.targetPrice) && r.targetPrice > 0)
+            .sort((a, b) => b.date.localeCompare(a.date));
+          return json({ ok: true, code, latest: normalized[0] || null, rows: normalized.slice(0, 12) });
+        } catch (error) {
+          return json({ ok: true, code, latest: null, rows: [], warning: safeErrorMessage(error) });
+        }
       }
 
       if (url.pathname === "/api/analyze") {
@@ -686,6 +719,16 @@ async function kisFinancialRatio(env, code, divCode) {
   });
 }
 
+async function kisInvestOpinion(env, code, startDate, endDate) {
+  return kisGet(env, "/uapi/domestic-stock/v1/quotations/invest-opinion", "FHKST663300C0", {
+    FID_COND_MRKT_DIV_CODE: "J",
+    FID_COND_SCR_DIV_CODE: "16633",
+    FID_INPUT_ISCD: code,
+    FID_INPUT_DATE_1: startDate,
+    FID_INPUT_DATE_2: endDate,
+  });
+}
+
 
 async function kisIndexCategory(env, inputCode, marketCls, belongingCode = "3") {
   return kisGet(env, "/uapi/domestic-stock/v1/quotations/inquire-index-category-price", "FHPUP02140000", {
@@ -836,7 +879,7 @@ function analyzeSectorTrend(rows) {
   const drawdown60 = maxDrawdownPct(closes.slice(-61));
   const range120 = rangePositionPct(closes.slice(-121));
 
-  // v0.7: 모든 항목을 0/5/10 식의 계단 점수로 주지 않고 실제 퍼센트 값을 연속 점수로 변환합니다.
+  // v0.8: 모든 항목을 0/5/10 식의 계단 점수로 주지 않고 실제 퍼센트 값을 연속 점수로 변환합니다.
   // 같은 정배열이라도 이격도, 기울기, 20·60·120일 수익률, 상승일 비율, 낙폭이 다르면 점수도 달라집니다.
   const structureScore =
     smoothBandScore(gapLastMa20, -4, 5, 8) +
@@ -1452,7 +1495,7 @@ function sectorSpecialFlag(name) {
   return null;
 }
 
-function buildStockRankItem(code, annualRows, ratioRows, callResults = []) {
+function buildStockRankItem(code, annualRows, ratioRows, priceOutput = {}, callResults = []) {
   const annual = normalizeIncomeRows(annualRows)
     .filter((r) => r.period)
     .sort((a, b) => b.period.localeCompare(a.period))
@@ -1482,8 +1525,7 @@ function buildStockRankItem(code, annualRows, ratioRows, callResults = []) {
   const reserve = latestRatio.reserveRatio;
   const roe = latestRatio.roe;
 
-  // v0.7: 계단식 점수를 연속 점수로 바꿔 같은 70점이 반복되는 현상을 줄입니다.
-  // 실제 CAGR, 부채비율, 유보율, ROE, 영업이익률의 크기 차이를 그대로 점수 차이로 반영합니다.
+  // Quality 100: 회사 크기가 아니라 성장의 방향과 재무 체력을 봅니다.
   let revenueScore = 0;
   if (chronological.length >= 2) {
     revenueScore += clamp01(revenueTransitions / Math.max(1, chronological.length - 1)) * 12;
@@ -1506,20 +1548,51 @@ function buildStockRankItem(code, annualRows, ratioRows, callResults = []) {
   const roeScore = Number.isFinite(roe) ? smoothBandScore(roe, -2, 22, 10) : 3;
   const marginScore = Number.isFinite(opMargin) ? smoothBandScore(opMargin, -2, 22, 10) : 3;
 
-  const score = round(Math.max(0, Math.min(100,
+  const qualityScore = round(Math.max(0, Math.min(100,
     revenueScore + operatingScore + debtScore + reserveScore + roeScore + marginScore
   )), 1);
 
-  let grade = "C";
-  if (score >= 88) grade = "S";
-  else if (score >= 80) grade = "A+";
-  else if (score >= 72) grade = "A";
-  else if (score >= 62) grade = "B";
+  const p = priceOutput || {};
+  const price = numOrNull(p.stck_prpr);
+  const per = numOrNull(p.per);
+  const pbr = numOrNull(p.pbr);
+  const eps = numOrNull(p.eps);
+  const bps = numOrNull(p.bps);
+  // KIS 주식현재가에는 250거래일 고저가가 제공됩니다. 약 52주 위치 계산에 우선 사용합니다.
+  const high52 = firstFinite(
+    numOrNull(p.d250_hgpr),
+    numOrNull(p.w52_hgpr),
+    numOrNull(p.stck_dryy_hgpr)
+  );
+  const low52 = firstFinite(
+    numOrNull(p.d250_lwpr),
+    numOrNull(p.w52_lwpr),
+    numOrNull(p.stck_dryy_lwpr)
+  );
+  const position52 = Number.isFinite(price) && Number.isFinite(high52) && Number.isFinite(low52) && high52 > low52
+    ? Math.max(0, Math.min(100, ((price - low52) / (high52 - low52)) * 100))
+    : null;
+  const earningsYield = Number.isFinite(per) && per > 0 ? 100 / per : null;
+  const pbrToRoe = Number.isFinite(pbr) && Number.isFinite(roe) && roe > 0 ? pbr / roe : null;
+  const grahamFair = Number.isFinite(eps) && eps > 0 && Number.isFinite(bps) && bps > 0
+    ? Math.sqrt(22.5 * eps * bps)
+    : null;
+
+  const trapWarnings = [];
+  if (Number.isFinite(roe) && roe <= 0) trapWarnings.push("ROE 0% 이하");
+  if (Number.isFinite(debt) && debt >= 200) trapWarnings.push("부채비율 200% 이상");
+  if (chronological.length >= 3 && revenueTransitions === 0) trapWarnings.push("최근 3년 매출 감소");
+  if (chronological.length >= 3 && opPositiveYears < 2) trapWarnings.push("영업이익 흑자 지속성 부족");
 
   return {
     code,
-    score,
-    grade,
+    // 클라이언트에서 동일 섹터 상대평가를 합친 뒤 최종 FF 점수로 바뀝니다.
+    score: qualityScore,
+    grade: gradeFromScore(qualityScore),
+    qualityScore,
+    qualityGrade: gradeFromScore(qualityScore),
+    valueScore: null,
+    finalScore: null,
     revenueGrowing3y: chronological.length >= 3 && revenueTransitions === 2,
     revenueTransitions,
     revenueCagr: Number.isFinite(revenueCagr) ? round(revenueCagr, 2) : null,
@@ -1530,6 +1603,22 @@ function buildStockRankItem(code, annualRows, ratioRows, callResults = []) {
     reserveRatio: Number.isFinite(reserve) ? reserve : null,
     roe: Number.isFinite(roe) ? roe : null,
     operatingMargin: Number.isFinite(opMargin) ? round(opMargin, 2) : null,
+    valuation: {
+      price,
+      per,
+      pbr,
+      eps,
+      bps,
+      high52,
+      low52,
+      high52Date: String(p.d250_hgpr_date || p.w52_hgpr_date || p.dryy_hgpr_date || "") || null,
+      low52Date: String(p.d250_lwpr_date || p.w52_lwpr_date || p.dryy_lwpr_date || "") || null,
+      position52: Number.isFinite(position52) ? round(position52, 2) : null,
+      earningsYield: Number.isFinite(earningsYield) ? round(earningsYield, 2) : null,
+      pbrToRoe: Number.isFinite(pbrToRoe) ? round(pbrToRoe, 4) : null,
+      grahamFair: Number.isFinite(grahamFair) ? round(grahamFair, 0) : null,
+    },
+    valueTrapWarnings: trapWarnings,
     scoreBreakdown: {
       revenue: round(revenueScore, 1),
       operating: round(operatingScore, 1),
@@ -1539,8 +1628,23 @@ function buildStockRankItem(code, annualRows, ratioRows, callResults = []) {
       margin: round(marginScore, 1),
     },
     errors: callResults.filter((x) => !x.ok).map((x) => `${x.label}: ${x.error}`),
-    scoreRule: "매출 30(CAGR+연속성) + 영업이익 20(흑자+증가+CAGR) + 부채비율 20 + 유보율 10 + ROE 10 + 영업이익률 10을 연속점수로 계산",
+    scoreRule: "Quality 100 = 매출30 + 영업이익20 + 부채20 + 유보10 + ROE10 + 영업이익률10. Value는 동일 섹터 상대평가로 별도 계산",
   };
+}
+
+function firstFinite(...values) {
+  for (const value of values) if (Number.isFinite(value)) return value;
+  return null;
+}
+
+function gradeFromScore(score) {
+  const n = Number(score);
+  if (!Number.isFinite(n)) return "-";
+  if (n >= 88) return "S";
+  if (n >= 80) return "A+";
+  if (n >= 72) return "A";
+  if (n >= 62) return "B";
+  return "C";
 }
 
 function cagrPercent(values) {
@@ -2078,16 +2182,27 @@ function diffMetric(a, b) {
 }
 
 function slimCurrentPrice(o = {}) {
+  const price = numOrNull(o.stck_prpr);
+  const high52 = firstFinite(numOrNull(o.d250_hgpr), numOrNull(o.w52_hgpr), numOrNull(o.stck_dryy_hgpr));
+  const low52 = firstFinite(numOrNull(o.d250_lwpr), numOrNull(o.w52_lwpr), numOrNull(o.stck_dryy_lwpr));
+  const position52 = Number.isFinite(price) && Number.isFinite(high52) && Number.isFinite(low52) && high52 > low52
+    ? Math.max(0, Math.min(100, ((price - low52) / (high52 - low52)) * 100))
+    : null;
   return {
     name: o.hts_kor_isnm || null,
     industry: o.bstp_kor_isnm || null,
     fiscalMonth: normalizeFiscalMonth(o.stac_month),
-    price: numOrNull(o.stck_prpr),
+    price,
     marketCap100MKRW: numOrNull(o.hts_avls),
     per: numOrNull(o.per),
     pbr: numOrNull(o.pbr),
     eps: numOrNull(o.eps),
     bps: numOrNull(o.bps),
+    high52,
+    low52,
+    high52Date: o.d250_hgpr_date || o.w52_hgpr_date || o.dryy_hgpr_date || null,
+    low52Date: o.d250_lwpr_date || o.w52_lwpr_date || o.dryy_lwpr_date || null,
+    position52: Number.isFinite(position52) ? round(position52, 2) : null,
     listedShares: numOrNull(o.lstn_stcn),
     foreignHoldingQty: numOrNull(o.frgn_hldn_qty),
     foreignExhaustionRate: numOrNull(o.hts_frgn_ehrt),
