@@ -2,15 +2,15 @@ const KIS_BASE = "https://openapi.koreainvestment.com:9443";
 const DART_BASE = "https://opendart.fss.or.kr/api";
 const KRX_BASE = "https://data-dbg.krx.co.kr/svc/apis";
 const ECOS_BASE = "https://ecos.bok.or.kr/api";
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.1.0";
 const MASTER_BASE = "https://new.real.download.dws.co.kr/common/master";
-const UNIVERSE_CACHE_URL = "https://ff-value-hunter-cache.local/stock-universe-v10";
-const SECTOR_TREND_CACHE_PREFIX = "https://ff-value-hunter-cache.local/sector-trend-v10/";
-const KRX_MARKET_CACHE_URL = "https://ff-value-hunter-cache.local/krx-market-v10";
-const KRX_FAILURE_CACHE_URL = "https://ff-value-hunter-cache.local/krx-failure-v10";
+const UNIVERSE_CACHE_PREFIX = "https://ff-value-hunter-cache.local/stock-universe-v11/";
+const SECTOR_TREND_CACHE_PREFIX = "https://ff-value-hunter-cache.local/sector-trend-v11/";
+const KRX_MARKET_CACHE_URL = "https://ff-value-hunter-cache.local/krx-market-v11";
+const KRX_FAILURE_CACHE_URL = "https://ff-value-hunter-cache.local/krx-failure-v11";
 const KIS_MIN_INTERVAL_MS = 450;
 const KIS_TOKEN_CACHE_URL = "https://ff-value-hunter-token-cache.local/kis-access-token-v3";
-const DART_CORP_CACHE_URL = "https://ff-value-hunter-cache.local/dart-corp-map-v10";
+const DART_CORP_CACHE_URL = "https://ff-value-hunter-cache.local/dart-corp-map-v11";
 
 const REQUIRED_BINDINGS = [
   "APP_ACCESS_KEY",
@@ -163,54 +163,29 @@ export default {
       if (url.pathname === "/api/sectors") {
         requireEnv(env, ["KIS_APP_KEY", "KIS_APP_SECRET"]);
 
-        // v1.0 기반 유지:
-        // KOSPI는 3=산업별구분을 우선 사용합니다. KOSDAQ의 3은 '일반구분'이라
-        // 실제 산업 목록이 충분하지 않을 수 있어, 매핑 결과가 적으면 전업종(0)을
-        // 다시 받아 '종목 마스터 대분류 코드가 실제로 존재하는 항목'만 남깁니다.
-        const [kospiPrimary, kosdaqPrimary, universeRes] = await Promise.all([
-          safeSource("KOSPI 산업", () => kisIndexCategory(env, "0001", "K", "3")),
-          safeSource("KOSDAQ 일반/산업 후보", () => kisIndexCategory(env, "1001", "Q", "3")),
-          safeSource("종목 마스터", () => loadStockUniverse()),
-        ]);
-
-        const universe = universeRes.value || [];
-        const errors = [kospiPrimary, kosdaqPrimary, universeRes].filter((x) => !x.ok);
-
-        const mapSectorRows = (data, marketName, marketCode) => {
-          const raw = normalizeSectorList(data, marketName, marketCode)
-            .filter((item) => item.name && item.code && isUsefulSector(item));
-          const mapped = dedupeSectors(raw)
-            .map((item) => {
-              const resolved = resolveSectorMembers(universe, item.code, item.name, item.marketCode);
-              return { ...item, memberCount: resolved.members.length, mappingMode: resolved.mode };
-            })
-            .filter((item) => item.memberCount > 0);
-          return { raw, mapped };
-        };
-
-        let kospiSet = mapSectorRows(kospiPrimary.value, "KOSPI", "K");
-        let kosdaqSet = mapSectorRows(kosdaqPrimary.value, "KOSDAQ", "Q");
-        let fallbackUsed = false;
-
-        // 산업 카드가 지나치게 적으면 해당 시장만 전업종 목록에서 재검증합니다.
-        if (kospiSet.mapped.length < 5) {
-          const fallback = await safeSource("KOSPI 전업종 폴백", () => kisIndexCategory(env, "0001", "K", "0"));
-          if (!fallback.ok) errors.push(fallback);
-          else { kospiSet = mapSectorRows(fallback.value, "KOSPI", "K"); fallbackUsed = true; }
-        }
-        if (kosdaqSet.mapped.length < 5) {
-          const fallback = await safeSource("KOSDAQ 전업종 폴백", () => kisIndexCategory(env, "1001", "Q", "0"));
-          if (!fallback.ok) errors.push(fallback);
-          else { kosdaqSet = mapSectorRows(fallback.value, "KOSDAQ", "Q"); fallbackUsed = true; }
+        // v1.1: 섹터 수를 종목 마스터 사전매핑으로 잘라내지 않습니다.
+        // KIS 업종 전체목록을 넓게 보여주고, 구성기업은 섹터 클릭 시
+        // 1) 해당 시장 종목마스터 정확매핑 -> 2) KIS 업종 거래량순위 폴백 순으로 찾습니다.
+        // 따라서 한 시장의 종목마스터 다운로드가 일시적으로 403이어도 섹터 레이더가 멈추지 않습니다.
+        const sources = [];
+        for (const spec of [
+          ["KOSPI 산업", "0001", "K", "3", "KOSPI"],
+          ["KOSPI 전업종", "0001", "K", "0", "KOSPI"],
+          ["KOSDAQ 전업종", "1001", "Q", "0", "KOSDAQ"],
+          ["KOSDAQ 일반구분", "1001", "Q", "3", "KOSDAQ"],
+        ]) {
+          const [label, input, marketCode, belonging, marketName] = spec;
+          const res = await safeSource(label, () => kisIndexCategory(env, input, marketCode, belonging));
+          sources.push({ ...res, marketCode, marketName });
         }
 
-        const sectors = dedupeSectors([...kospiSet.mapped, ...kosdaqSet.mapped])
+        const sectors = dedupeSectors(sources.flatMap((src) =>
+          src.ok ? normalizeSectorList(src.value, src.marketName, src.marketCode).filter((item) => item.name && item.code && isUsefulSector(item)) : []
+        )).map((item) => ({ ...item, memberCount: null, mappingMode: "deferred" }))
           .sort((a, b) => (b.dayPct || 0) - (a.dayPct || 0));
-        const rawCount = kospiSet.raw.length + kosdaqSet.raw.length;
-        const dropped = Math.max(0, rawCount - sectors.length);
 
         if (!sectors.length) {
-          const error = new Error("산업 목록은 수신했지만 종목 마스터와 매핑되는 섹터가 없습니다. KIS 업종/종목 마스터 데이터 형식을 다시 확인해주세요.");
+          const error = new Error("KIS 업종 목록을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.");
           error.status = 502;
           throw error;
         }
@@ -219,17 +194,15 @@ export default {
           ok: true,
           version: APP_VERSION,
           sectors,
-          errors: errors.map((x) => ({ label: x.label, error: x.error })),
+          errors: sources.filter((x) => !x.ok).map((x) => ({ label: x.label, error: x.error })),
           diagnostics: {
-            rawSectorCount: rawCount,
+            rawSectorCount: sources.reduce((sum, src) => sum + (src.ok ? normalizeSectorList(src.value, src.marketName, src.marketCode).length : 0), 0),
             investableSectorCount: sectors.length,
-            droppedZeroMemberSectors: dropped,
-            kospiSectorCount: kospiSet.mapped.length,
-            kosdaqSectorCount: kosdaqSet.mapped.length,
-            universeCount: universe.length,
-            fallbackUsed,
+            kospiSectorCount: sectors.filter((x) => x.marketCode === "K").length,
+            kosdaqSectorCount: sectors.filter((x) => x.marketCode === "Q").length,
+            mappingDeferred: true,
           },
-          note: "v1.0은 실제 상장기업이 1개 이상 정확히 매핑되는 산업 섹터만 화면에 노출합니다. 특수지수/파생지수/구성기업 0개 항목은 자동 제외합니다.",
+          note: "v1.1은 KIS 업종 전체목록을 먼저 표시하고, 관련기업은 섹터 선택 시 시장별 종목마스터와 KIS 업종구성 폴백으로 검증합니다.",
         });
       }
 
@@ -238,20 +211,34 @@ export default {
         const q = String(url.searchParams.get("q") || "").trim();
         const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 10), 1), 20);
         if (!q) return json({ ok: true, items: [] });
-        let universe = await loadStockUniverse();
 
-        // KRX 종목기본정보가 사용 가능하면 실제 영문 종목명을 검색에 결합합니다.
+        let universe = await loadStockUniverse("ALL");
+
+        // 종목 마스터 한쪽이 일시적으로 막혀도 KRX 기본정보로 검색 Universe를 보완합니다.
         if (hasBinding(env, "KRX_AUTH_KEY")) {
           const krxRes = await safeSource("KRX 종목기본정보", () => loadKrxMarketData(env));
           if (krxRes.ok && krxRes.value?.byCode) {
             const byCode = krxRes.value.byCode;
-            universe = universe.map((item) => ({
-              ...item,
-              englishName: byCode[item.code]?.englishName || englishNameFor(item.code, item.name) || "",
-              nameEn: byCode[item.code]?.englishName || englishNameFor(item.code, item.name) || "",
-            }));
+            const merged = new Map((universe || []).map((item) => [item.code, item]));
+            for (const [code, row] of Object.entries(byCode)) {
+              if (!/^\d{6}$/.test(code)) continue;
+              const prev = merged.get(code) || {};
+              const market = row.market || prev.market || "";
+              const name = row.name || prev.name || code;
+              merged.set(code, {
+                ...prev,
+                code,
+                name,
+                market,
+                marketCap: prev.marketCap ?? (Number(row.marketCapWon) > 0 ? Number(row.marketCapWon) / 100000000 : null),
+                englishName: row.englishName || prev.englishName || englishNameFor(code, name) || "",
+                nameEn: row.englishName || prev.nameEn || englishNameFor(code, name) || "",
+              });
+            }
+            universe = [...merged.values()];
           }
         }
+
         const items = searchStocks(universe, q, limit);
         return json({ ok: true, query: q, items, version: APP_VERSION });
       }
@@ -275,38 +262,67 @@ export default {
         const code = normalizeSectorCode(url.searchParams.get("code"));
         const name = String(url.searchParams.get("name") || "").trim();
         const market = String(url.searchParams.get("market") || "ALL").toUpperCase();
-        const universe = await loadStockUniverse();
-        const resolved = resolveSectorMembers(universe, code, name, market);
 
+        // 선택한 시장의 종목 마스터만 불러옵니다. KOSPI 분석 중 KOSDAQ 마스터 403 때문에
+        // 전체가 실패하던 이전 문제를 제거했습니다.
+        const universeRes = await safeSource(`${market} 종목 마스터`, () => loadStockUniverse(market));
+        const universe = universeRes.value || [];
+        const resolved = resolveSectorMembers(universe, code, name, market);
         let members = resolved.members.map(decorateMasterStock);
+        let mappingMode = resolved.mode;
+
+        // 정확매핑이 성공했다면 그대로 사용합니다. 폴백 결과를 섞으면 다른 분류의
+        // 종목이 추가될 수 있으므로, 마스터가 막혔거나 정확매핑이 0건일 때만
+        // KIS 거래량순위의 '기타: 업종코드' 기능으로 구성종목을 직접 조회합니다.
+        let fallbackRes = { ok: true, label: "KIS 업종 구성종목", value: [], error: null };
+        if (!resolved.members.length) {
+          fallbackRes = await safeSource("KIS 업종 구성종목", () => kisSectorMembersByVolume(env, code, market));
+          if (fallbackRes.ok && Array.isArray(fallbackRes.value) && fallbackRes.value.length) {
+            members = dedupeStocks(fallbackRes.value);
+            mappingMode = "kisSectorRank";
+          }
+        }
+
         let krx = { available: false, date: null };
         if (hasBinding(env, "KRX_AUTH_KEY")) {
-          // KRX는 실제로 사용합니다. 다만 KRX 승인 시작 전/휴일/일시 오류가
-          // 있어도 산업-기업 매핑 자체가 깨지지 않도록 보조 데이터로 결합합니다.
           const krxRes = await safeSource("KRX 시장데이터", () => loadKrxMarketData(env));
           if (krxRes.ok && krxRes.value?.byCode) {
             const byCode = krxRes.value.byCode;
-            members = members.map((item) => ({ ...item, krx: byCode[item.code] || null }));
+            members = members.map((item) => ({
+              ...item,
+              name: byCode[item.code]?.name || item.name || item.code,
+              market: byCode[item.code]?.market || item.market || (market === "K" ? "KOSPI" : market === "Q" ? "KOSDAQ" : ""),
+              englishName: byCode[item.code]?.englishName || item.englishName || englishNameFor(item.code, item.name) || "",
+              nameEn: byCode[item.code]?.englishName || item.nameEn || englishNameFor(item.code, item.name) || "",
+              krx: byCode[item.code] || null,
+            })).filter((item) => {
+              if (market === "K") return !item.krx || item.market === "KOSPI";
+              if (market === "Q") return !item.krx || item.market === "KOSDAQ";
+              return true;
+            });
             krx = { available: true, date: krxRes.value.date || null };
           }
         }
 
+        members = dedupeStocks(members).filter((item) => /^\d{6}$/.test(String(item.code || "")));
         members.sort((a, b) => {
           const capA = Number(a.krx?.marketCapWon) || Number(a.marketCap) * 100000000 || 0;
           const capB = Number(b.krx?.marketCapWon) || Number(b.marketCap) * 100000000 || 0;
-          return capB - capA;
+          if (capB !== capA) return capB - capA;
+          return String(a.name || "").localeCompare(String(b.name || ""), "ko");
         });
 
         return json({
           ok: true,
           sector: { code, name, market },
           total: members.length,
-          mappingMode: resolved.mode,
+          mappingMode,
           krx,
           members: members.slice(0, 300),
-          note: resolved.mode === "industryLarge"
-            ? "KIS 산업분류 코드와 종목 마스터 지수업종 대분류를 정확히 일치시켰습니다."
-            : "KRX 명시 섹터명일 때만 해당 KRX 섹터 플래그를 사용했습니다. 일반 업종에는 테마 플래그를 섞지 않습니다.",
+          warnings: [universeRes, fallbackRes].filter((x) => !x.ok).map((x) => ({ label: x.label, error: x.error })),
+          note: mappingMode.includes("kisSectorRank")
+            ? "KIS 업종코드 기반 구성종목 조회를 사용했습니다. 종목마스터 다운로드가 일시적으로 막혀도 계속 작동합니다."
+            : "KIS 종목마스터 업종 대분류를 정확히 매핑했습니다.",
         });
       }
 
@@ -325,7 +341,7 @@ export default {
         }
         const items = [];
         for (const code of codes) {
-          // v1.0: 매출 절대규모보다 분기/연간 성장의 일관성 + Value를 중시합니다.
+          // v1.1: 매출 절대규모보다 분기/연간 성장의 일관성 + Value를 중시합니다.
           const annualRes = await safeSource("연간 손익", () => kisIncomeStatement(env, code, "0"));
           const quarterRes = await safeSource("분기 손익", () => kisIncomeStatement(env, code, "1"));
           const ratioRes = await safeSource("재무비율", () => kisFinancialRatio(env, code, "0"));
@@ -339,7 +355,7 @@ export default {
             [annualRes, quarterRes, ratioRes, priceRes]
           ));
         }
-        return json({ ok: true, items, scoringVersion: "quarter-consistency-value-v10" });
+        return json({ ok: true, items, scoringVersion: "quarter-consistency-value-v11" });
       }
 
 
@@ -826,6 +842,50 @@ async function kisIndexCategory(env, inputCode, marketCls, belongingCode = "3") 
   });
 }
 
+async function kisSectorMembersByVolume(env, sectorCode, marketCode = "ALL") {
+  const market = marketCode === "NX" ? "NX" : "J";
+  const rows = [];
+  // 평균거래량/거래금액/거래증가율을 합쳐 한 정렬 기준 때문에 누락되는 종목을 줄입니다.
+  for (const belonging of ["0", "3", "1"]) {
+    const data = await kisGet(env, "/uapi/domestic-stock/v1/quotations/volume-rank", "FHPST01710000", {
+      FID_COND_MRKT_DIV_CODE: market,
+      FID_COND_SCR_DIV_CODE: "20171",
+      FID_INPUT_ISCD: sectorCode,
+      FID_DIV_CLS_CODE: "1",
+      FID_BLNG_CLS_CODE: belonging,
+      FID_TRGT_CLS_CODE: "111111111",
+      FID_TRGT_EXLS_CLS_CODE: "000000",
+      FID_INPUT_PRICE_1: "0",
+      FID_INPUT_PRICE_2: "0",
+      FID_VOL_CNT: "0",
+      FID_INPUT_DATE_1: "0",
+    });
+    for (const r of data?.output || []) rows.push(r);
+  }
+
+  const marketName = marketCode === "K" ? "KOSPI" : marketCode === "Q" ? "KOSDAQ" : "";
+  const uniq = new Map();
+  for (const r of rows) {
+    const code = String(r.mksc_shrn_iscd || r.stck_shrn_iscd || "").trim();
+    if (!/^\d{6}$/.test(code)) continue;
+    const name = String(r.hts_kor_isnm || r.prdt_name || "").trim() || code;
+    uniq.set(code, {
+      code,
+      name,
+      market: marketName,
+      englishName: englishNameFor(code, name) || "",
+      nameEn: englishNameFor(code, name) || "",
+      marketCap: null,
+      currentPrice: numOrNull(r.stck_prpr),
+      dayPct: numOrNull(r.prdy_ctrt),
+      volume: numOrNull(r.acml_vol),
+      tradeValueWon: numOrNull(r.acml_tr_pbmn),
+      sectorMatch: "kisSectorRank",
+    });
+  }
+  return [...uniq.values()];
+}
+
 async function kisIndexDaily(env, sectorCode) {
   // 기간별 업종시세 API는 명시적 시작/종료일을 받을 수 있어 장기 이동평균 계산에 더 적합합니다.
   // 응답 건수 제한에 대비해 두 구간으로 나눠 받고 날짜로 합칩니다.
@@ -887,9 +947,9 @@ function isUsefulSector(item) {
   const code = normalizeIndustryCode(item?.code);
   if (!name || !code) return false;
 
-  // 이 화면의 목적은 '산업 → 기업' 발굴입니다. 구성기업이 없는 지수/파생/채권/
-  // 스마트베타/테마성 지수는 STEP 1에서 제거합니다. 최종적으로는 /api/sectors에서
-  // 실제 종목 마스터 매칭이 1개 이상인지 한 번 더 검증합니다.
+  // 이 화면의 목적은 '산업 → 기업' 발굴입니다. 지수/파생/채권/스마트베타처럼
+  // 산업으로 보기 어려운 항목만 STEP 1에서 제거합니다. 구성기업 매핑은 섹터를
+  // 클릭한 뒤 시장별 종목마스터 또는 KIS 업종구성 폴백으로 검증합니다.
   if (/^(종합|대형주|중형주|소형주|우선주|코스피|코스닥|KOSPI|KOSDAQ|코스피200|코스닥150)$/i.test(name)) return false;
   if (/(선물|채권|TMI|스마트베타|기후변화|혼합|레버리지|인버스|F-K|F_K|ETF|ETN)/i.test(name)) return false;
   if (/^(KOSPI|KOSDAQ)\d+/i.test(name)) return false;
@@ -965,7 +1025,7 @@ function analyzeSectorTrend(rows) {
   const drawdown60 = maxDrawdownPct(closes.slice(-61));
   const range120 = rangePositionPct(closes.slice(-121));
 
-  // v1.0: 모든 항목을 0/5/10 식의 계단 점수로 주지 않고 실제 퍼센트 값을 연속 점수로 변환합니다.
+  // v1.1: 모든 항목을 0/5/10 식의 계단 점수로 주지 않고 실제 퍼센트 값을 연속 점수로 변환합니다.
   // 같은 정배열이라도 이격도, 기울기, 20·60·120일 수익률, 상승일 비율, 낙폭이 다르면 점수도 달라집니다.
   const structureScore =
     smoothBandScore(gapLastMa20, -4, 5, 8) +
@@ -1121,28 +1181,44 @@ async function cacheJsonPut(url, data, ttlSeconds) {
   }
 }
 
-let universeMemoryCache = null;
-async function loadStockUniverse() {
-  if (universeMemoryCache?.length) return universeMemoryCache;
-  const cached = await cacheJsonGet(UNIVERSE_CACHE_URL);
-  if (Array.isArray(cached?.items) && cached.items.length) {
-    universeMemoryCache = cached.items;
-    return universeMemoryCache;
-  }
+const universeMemoryCache = { K: null, Q: null };
+async function loadStockUniverse(marketCode = "ALL") {
+  const targets = marketCode === "K" ? [["K", "kospi"]]
+    : marketCode === "Q" ? [["Q", "kosdaq"]]
+    : [["K", "kospi"], ["Q", "kosdaq"]];
+  const all = [];
 
-  const [kospi, kosdaq] = await Promise.all([
-    fetchMasterMarket("kospi"),
-    fetchMasterMarket("kosdaq"),
-  ]);
-  universeMemoryCache = [...kospi, ...kosdaq];
-  await cacheJsonPut(UNIVERSE_CACHE_URL, { items: universeMemoryCache, updatedAt: new Date().toISOString() }, 60 * 60 * 12);
-  return universeMemoryCache;
+  for (const [key, market] of targets) {
+    if (Array.isArray(universeMemoryCache[key]) && universeMemoryCache[key].length) {
+      all.push(...universeMemoryCache[key]);
+      continue;
+    }
+    const cacheUrl = `${UNIVERSE_CACHE_PREFIX}${key}`;
+    const cached = await cacheJsonGet(cacheUrl);
+    if (Array.isArray(cached?.items) && cached.items.length) {
+      universeMemoryCache[key] = cached.items;
+      all.push(...cached.items);
+      continue;
+    }
+
+    try {
+      const items = await fetchMasterMarket(market);
+      universeMemoryCache[key] = items;
+      all.push(...items);
+      await cacheJsonPut(cacheUrl, { items, updatedAt: new Date().toISOString() }, 60 * 60 * 18);
+    } catch (_) {
+      // KIS 종목 마스터 CDN은 Cloudflare egress에 간헐적으로 403을 줄 수 있습니다.
+      // 해당 시장만 빈 배열로 두고, 호출자는 KIS 업종구성/KRX 폴백을 사용합니다.
+      universeMemoryCache[key] = [];
+    }
+  }
+  return all;
 }
 
 async function fetchMasterMarket(market) {
   const isKospi = market === "kospi";
   const url = `${MASTER_BASE}/${market}_code.mst.zip`;
-  const res = await fetch(url, { headers: { "user-agent": "FF-Value-Hunter/0.4" } });
+  const res = await fetch(url, { headers: { "user-agent": "FF-Value-Hunter/1.1" } });
   if (!res.ok) throw new Error(`KIS ${market.toUpperCase()} 종목 마스터 다운로드 실패 HTTP ${res.status}`);
   const zipBytes = new Uint8Array(await res.arrayBuffer());
   const mstBytes = await unzipMstFile(zipBytes);
@@ -1372,7 +1448,7 @@ function normalizeSearchText(text) {
 
 const ENGLISH_NAME_BY_CODE = Object.freeze({
   "005930": "Samsung Electronics",
-  "00.7.0": "SK hynix",
+  "000660": "SK hynix",
   "035420": "NAVER",
   "035720": "Kakao",
   "005380": "Hyundai Motor Company",
@@ -1380,13 +1456,13 @@ const ENGLISH_NAME_BY_CODE = Object.freeze({
   "012330": "Hyundai Mobis",
   "051910": "LG Chem",
   "373220": "LG Energy Solution",
-  "0.7.00": "Samsung SDI",
+  "006400": "Samsung SDI",
   "066570": "LG Electronics",
   "009150": "Samsung Electro-Mechanics",
   "207940": "Samsung Biologics",
   "068270": "Celltrion",
   "005490": "POSCO Holdings",
-  "00.7.0": "POSCO Future M",
+  "003670": "POSCO Future M",
   "028260": "Samsung C&T",
   "034730": "SK Inc.",
   "096770": "SK Innovation",
@@ -1413,7 +1489,7 @@ const ENGLISH_NAME_BY_CODE = Object.freeze({
   "042700": "Hanmi Semiconductor",
   "240810": "Wonik IPS",
   "036930": "Jusung Engineering",
-  "00.7.0": "ISU Petasys",
+  "007660": "ISU Petasys",
   "247540": "EcoPro BM",
   "086520": "EcoPro",
   "196170": "ALTEOGEN",
@@ -1915,7 +1991,7 @@ async function kisDailyChart(env, code, targetRows = 190) {
 }
 
 // -----------------------------------------------------------------------------
-// v1.0 · Loopera's Advice
+// v1.1 · Loopera's Advice
 // 공개된 연구 철학(Hypothesis-driven / Evidence-gated / Research Memory)을
 // 참고해 독립적으로 구현한 결정론적 검증 계층입니다. 외부 프로젝트 코드는 복사하지 않습니다.
 // -----------------------------------------------------------------------------
@@ -2274,7 +2350,7 @@ async function dartCompany(env, corpCode) {
   if ([301, 302, 303, 307, 308].includes(res.status)) {
     const location = res.headers.get("location") || "";
     if (/error1\.html/i.test(location)) {
-      throw new Error("OpenDART가 Cloudflare Worker 요청을 오류 페이지로 리디렉션했습니다. v1.0에서는 이 오류가 반복되지 않도록 리디렉션을 중단하고, 기업명·업종은 KIS로 대체합니다.");
+      throw new Error("OpenDART가 Cloudflare Worker 요청을 오류 페이지로 리디렉션했습니다. v1.1에서는 이 오류가 반복되지 않도록 리디렉션을 중단하고, 기업명·업종은 KIS로 대체합니다.");
     }
     throw new Error(`OpenDART가 예상치 못한 리디렉션을 반환했습니다 (HTTP ${res.status}).`);
   }
@@ -2304,7 +2380,7 @@ async function dartCorpMap(env) {
   if (cached?.byStock && Object.keys(cached.byStock).length > 1000) return cached.byStock;
   const key = bindingValue(env, "DART_API_KEY");
   const url = `${DART_BASE}/corpCode.xml?crtfc_key=${encodeURIComponent(key)}`;
-  const res = await fetch(url, { redirect: "manual", headers: { accept: "application/zip,application/octet-stream,*/*", "user-agent": "FF-Value-Hunter/1.0" } });
+  const res = await fetch(url, { redirect: "manual", headers: { accept: "application/zip,application/octet-stream,*/*", "user-agent": "FF-Value-Hunter/1.1" } });
   if (!res.ok) throw new Error(`DART 고유번호 다운로드 실패 HTTP ${res.status}`);
   const bytes = new Uint8Array(await res.arrayBuffer());
   const xmlBytes = await unzipZipEntry(bytes, ".xml");
@@ -2379,7 +2455,7 @@ function disclosureRiskWeight(title) {
 }
 
 async function dartJson(url, label = "OpenDART") {
-  const res = await fetch(url, { redirect: "manual", headers: { accept: "application/json,*/*", "user-agent": "FF-Value-Hunter/1.0" } });
+  const res = await fetch(url, { redirect: "manual", headers: { accept: "application/json,*/*", "user-agent": "FF-Value-Hunter/1.1" } });
   if ([301,302,303,307,308].includes(res.status)) throw new Error(`${label} 리디렉션 오류`);
   const text = await res.text();
   let data; try { data = JSON.parse(text); } catch { throw new Error(`${label} JSON 응답 아님`); }
@@ -2391,7 +2467,7 @@ async function fetchNewsRisk(companyName) {
   const riskTerms = "유상증자 OR 횡령 OR 배임 OR 구속 OR 압수수색 OR 경영권분쟁 OR 상장폐지 OR 영업정지 OR 회생절차 OR 감사의견";
   const q = `\"${companyName}\" (${riskTerms})`;
   const url = `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=ko&gl=KR&ceid=KR:ko`;
-  const res = await fetch(url, { headers: { "user-agent": "FF-Value-Hunter/1.0" } });
+  const res = await fetch(url, { headers: { "user-agent": "FF-Value-Hunter/1.1" } });
   if (!res.ok) throw new Error(`뉴스 RSS HTTP ${res.status}`);
   const xml = await res.text();
   const items = [];
@@ -2986,21 +3062,22 @@ function buildIdentity(rawOutput, priceOutput, code) {
   const o = Array.isArray(rawOutput) ? (rawOutput[0] || {}) : (rawOutput || {});
   const p = priceOutput || {};
   const market = inferMarket(o);
-  const sectorCandidates = [
-    o.idx_bztp_scls_cd_name,
-    o.idx_bztp_mcls_cd_name,
+  const indexClassification = [
     o.idx_bztp_lcls_cd_name,
-    p.bstp_kor_isnm,
-  ].filter(Boolean);
+    o.idx_bztp_mcls_cd_name,
+    o.idx_bztp_scls_cd_name,
+  ].filter(Boolean).join(" · ");
+  const representativeSector = p.bstp_kor_isnm || o.std_idst_clsf_cd_name || o.idx_bztp_scls_cd_name || o.idx_bztp_mcls_cd_name || o.idx_bztp_lcls_cd_name || null;
   return {
     code,
     name: o.prdt_name || o.prdt_abrv_name || p.hts_kor_isnm || null,
     englishName: o.prdt_eng_name || o.prdt_eng_abrv_name || null,
     market,
-    sector: sectorCandidates[0] || null,
-    industryLarge: o.idx_bztp_lcls_cd_name || null,
-    industryMedium: o.idx_bztp_mcls_cd_name || null,
-    industrySmall: o.idx_bztp_scls_cd_name || null,
+    sector: representativeSector,
+    industryLarge: null,
+    industryMedium: null,
+    industrySmall: null,
+    indexClassification: indexClassification || null,
     industryStandard: o.std_idst_clsf_cd_name || null,
     fiscalMonth: normalizeFiscalMonth(o.setl_mmdd) || normalizeFiscalMonth(p.stac_month),
     settlementDate: o.setl_mmdd || null,

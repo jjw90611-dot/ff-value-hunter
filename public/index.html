@@ -6,6 +6,7 @@
   <meta name="color-scheme" content="light" />
   <meta name="theme-color" content="#0b1f3a" />
   <title>FF Value Hunter · 저평가 우량주 스캐너</title>
+  <link rel="stylesheet" href="https://hangeul.pstatic.net/hangeul_static/css/nanum-barun-gothic.css" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -37,7 +38,7 @@
         <div class="hero-trust">
           <span>자동매수·매도 없음</span>
           <span>기업 선별 보조도구</span>
-          <span>v1.0</span>
+          <span>v1.1</span>
         </div>
       </div>
 
@@ -168,7 +169,7 @@
       <div id="memberGrid" class="company-grid"></div>
       <div class="method-card">
         <div class="method-icon">FF</div>
-        <div><b>FF 저평가 우량점수 v1.0 · Evidence Gate 준비</b><p><b>분기 실적을 최우선</b>으로 최근 4분기 매출·영업이익률이 꾸준히 개선되는지, 과거 구간에서도 같은 흐름이 반복됐는지 Train/Test 방식으로 검증합니다. 최종 상위후보는 <b>Quality 40% + Value 40% + 외국인·기관/거래량 매집 20% - DART·뉴스 위험감점</b>으로 재평가합니다. 실적은 좋아지는데 1년 주가가 낮아진 기업은 가치괴리 가점을 줍니다.</p></div>
+        <div><b>FF 저평가 우량점수 v1.1 · Evidence Gate 준비</b><p><b>분기 실적을 최우선</b>으로 최근 4분기 매출·영업이익률이 꾸준히 개선되는지, 과거 구간에서도 같은 흐름이 반복됐는지 Train/Test 방식으로 검증합니다. 최종 상위후보는 <b>Quality 40% + Value 40% + 외국인·기관/거래량 매집 20% - DART·뉴스 위험감점</b>으로 재평가합니다. 실적은 좋아지는데 1년 주가가 낮아진 기업은 가치괴리 가점을 줍니다.</p></div>
       </div>
     </section>
 
@@ -245,6 +246,19 @@
           <span class="selected-check">선택됨 ✓</span>
         </div>
 
+        <div id="researchLinks" class="research-links hidden">
+          <div class="research-links-head">
+            <div><b>기업·증권사 리포트 바로보기</b><span>선택한 기업의 외부 리서치를 함께 확인하세요.</span></div>
+            <span id="researchLinkStatus" class="research-link-status">기업 선택 후 활성화</span>
+          </div>
+          <div class="research-link-grid">
+            <a id="reportHankyung" class="research-link hankyung" href="https://markets.hankyung.com/consensus/" target="_blank" rel="noopener noreferrer"><b>한경 컨센서스</b><span>선택 종목 컨센서스 바로보기 ↗</span></a>
+            <a id="reportNaver" class="research-link naver-report" href="https://finance.naver.com/research/company_list.naver" target="_blank" rel="noopener noreferrer"><b>네이버 증권사 리포트</b><span>선택 종목 리포트 바로보기 ↗</span></a>
+            <a id="reportFnGuide" class="research-link fnguide" href="https://comp.fnguide.com/" target="_blank" rel="noopener noreferrer"><b>FnGuide Company Guide</b><span>컨센서스·재무·기업정보 ↗</span></a>
+            <a id="reportDart" class="research-link dart-report" href="https://dart.fss.or.kr/" target="_blank" rel="noopener noreferrer"><b>DART 공시</b><span>기업명 자동 복사 후 공시 검색 ↗</span></a>
+          </div>
+        </div>
+
         <div class="stock-action-row">
           <button id="analyze" class="primary-button analyze-btn" disabled>기업 상세분석</button>
           <a id="npayTopLink" class="npay-button disabled-link" href="https://m.stock.naver.com/" target="_blank" rel="noopener noreferrer">Npay 증권에서 차트 보기 ↗</a>
@@ -272,19 +286,13 @@
         </div>
         <div id="deployNotice" class="deploy-notice hidden"></div>
         <div id="apiCards" class="cards"></div>
-        <details class="diagnostic">
-          <summary>Cloudflare 연결 문제 해결</summary>
-          <div class="diagnostic-body">
-            <p><b>중요:</b> Variables and Secrets에 값을 입력한 뒤 <b>Deploy</b>까지 해야 현재 Worker에 반영됩니다.</p>
-            <p><code>APP_ACCESS_KEY</code>, <code>DART_API_KEY</code>, <code>ECOS_API_KEY</code>, <code>KIS_APP_KEY</code>, <code>KIS_APP_SECRET</code>, <code>KRX_AUTH_KEY</code>는 Secret 타입을 권장합니다.</p>
-          </div>
-        </details>
+
       </div>
     </details>
 
     <footer>
       <div class="brand footer-brand"><span class="brand-mark">FF</span><span class="brand-copy"><b>Value Hunter</b><small>산업 → 기업 → Evidence Gate → 기업 검증</small></span></div>
-      <p>기업 선별을 돕는 개인용 가치투자 도구 · 자동주문 기능 없음 · 시장 데이터 일부는 KRX 통계정보 활용 · v1.0</p>
+      <p>기업 선별을 돕는 개인용 가치투자 도구 · 자동주문 기능 없음 · 시장 데이터 일부는 KRX 통계정보 활용 · v1.1</p>
     </footer>
   </main>
   <script src="/app.js" type="module"></script>

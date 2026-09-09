@@ -29,7 +29,7 @@ body {
     radial-gradient(circle at 92% 4%, rgba(31,185,139,.10), transparent 32%),
     var(--bg);
   color: var(--ink);
-  font-family: Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", "Segoe UI", Arial, sans-serif;
+  font-family: "NanumBarunGothic", "Nanum Barun Gothic", "SeoulNamsan", "KT&G 상상체", "Noto Sans KR", "Apple SD Gothic Neo", "Segoe UI", Arial, sans-serif;
   letter-spacing: -.012em;
 }
 button, input, a { font: inherit; }
@@ -474,7 +474,7 @@ footer p { margin: 0; font-size: 9px; }
   .value-warning { font-size: 9px; }
 }
 
-/* v1.0 · progress energy / deep value signals */
+/* v1.1 · progress energy / deep value signals */
 .progress-note:has(.energy-track) { padding: 14px 15px; background: linear-gradient(180deg,#f7fbff,#eef5ff); border-color:#d5e5fb; overflow:hidden; }
 .energy-progress-head { display:flex; align-items:center; justify-content:space-between; gap:12px; color:#244b7a; }
 .energy-progress-head b { font-size:12px; }
@@ -501,7 +501,7 @@ footer p { margin: 0; font-size: 9px; }
   .analyze-energy-pct { font-size:15px; }
 }
 
-/* v1.0 · Loopera's Advice — independent evidence-gated research UI */
+/* v1.1 · Loopera's Advice — independent evidence-gated research UI */
 .guide-grid.four { grid-template-columns: repeat(4,1fr); }
 .loopera-guide { border-color:#ddd4ff; background:linear-gradient(145deg,#fff,#faf8ff); }
 .loopera-guide .guide-no { background:#f1ecff; color:#7147c6; }
@@ -622,3 +622,161 @@ footer p { margin: 0; font-size: 9px; }
   .loopera-ready { grid-template-columns:1fr; text-align:center; }
   .loopera-orbit { margin:0 auto; }
 }
+
+/* v1.1 typography · Nanum Barun Gothic + larger readable UI */
+body {
+  font-family: "NanumBarunGothic", "Nanum Barun Gothic", "SeoulNamsan", "KT&G 상상체", "Noto Sans KR", "Apple SD Gothic Neo", "Segoe UI", sans-serif;
+  font-size: 16px;
+  letter-spacing: -.018em;
+}
+.brand-copy b { font-size: 17px; }
+.brand-copy small { font-size: 11px; }
+.live-badge, .ghost-link { font-size: 12px; }
+.guide-block b { font-size: 16px; }
+.guide-block small { font-size: 12px; line-height: 1.45; }
+.access-drawer > summary { font-size: 13px; }
+.access-body p, .small { font-size: 12px; }
+.step-heading h2 { font-size: 27px; }
+.step-heading p { font-size: 14px; line-height: 1.6; }
+.step-number { min-width: 74px; height: 35px; font-size: 11px; }
+.primary-button, .secondary-button, .soft-button { min-height: 46px; padding: 0 17px; font-size: 13px; }
+.stat-strip small { font-size: 11px; }
+.stat-strip b { font-size: 25px; }
+.status-text { font-size: 16px !important; }
+.chip { min-height: 38px; padding: 0 13px; font-size: 12px; }
+.search-shell input { height: 46px; font-size: 14px; }
+.progress-note { padding: 14px 15px; font-size: 13px; }
+.empty-state b { font-size: 17px; }
+.empty-state span { font-size: 13px; }
+.sector-card { min-height: 200px; padding: 18px; }
+.market-tag { font-size: 10px; }
+.day-change { font-size: 12px; }
+.sector-card h3 { font-size: 18px; }
+.sector-member-count { font-size: 11px; }
+.sector-score-row b { font-size: 34px; }
+.sector-score-row span, .sector-score-row em { font-size: 11px; }
+.sector-label { font-size: 12px; }
+.sector-mini span { font-size: 10.5px; padding: 5px 7px; }
+.trend-metric span { font-size: 11px; }
+.trend-metric b { font-size: 23px; }
+.trend-metric small { font-size: 10px; }
+.trend-breakdown span { font-size: 11px; }
+.modern-accordion > summary b, .accordion > summary > span:first-child { font-size: 13px; }
+.modern-accordion > summary small, .accordion-meta { font-size: 11px !important; }
+.member-head b { font-size: 16px; }
+.member-head small { font-size: 11px; }
+.company-card { padding: 18px; }
+.company-name b { font-size: 16px; }
+.company-name span { font-size: 11px; }
+.company-name small { font-size: 10.5px; line-height: 1.4; }
+.rank-no { width: 33px; height: 33px; font-size: 11px; }
+.grade-badge { font-size: 10px; }
+.grade-score { font-size: 12px; }
+.analysis-wait { font-size: 10px; }
+.company-metric { min-height: 65px; padding: 11px; }
+.company-metric small { font-size: 10px; }
+.company-metric b { font-size: 12.5px; line-height: 1.35; white-space: normal; }
+.mini-link, .mini-button { min-height: 38px; font-size: 11px; }
+.method-card b { font-size: 13px; }
+.method-card p { font-size: 11.5px; line-height: 1.55; }
+.stock-search-label span { font-size: 14px; }
+.stock-search-label small { font-size: 11px; }
+.stock-search-shell input { font-size: 15px; }
+.stock-suggestion-name b { font-size: 14px; }
+.stock-suggestion-name span { font-size: 11px; }
+.stock-suggestion-meta b { font-size: 11px; }
+.stock-suggestion-meta span { font-size: 9px; }
+.selected-copy b { font-size: 15px; }
+.selected-copy span, .selected-copy small { font-size: 10.5px; }
+.selected-check { font-size: 10px; }
+.npay-button { min-height: 46px; font-size: 12px; }
+.advanced-options > summary { min-height: 46px; font-size: 11px; }
+.loading b { font-size: 13px; }
+.loading small { font-size: 10.5px; }
+.company-name-row h3 { font-size: 29px; }
+.result-title .sub { font-size: 10px; }
+.metric h3 { font-size: 13px; }
+.big { font-size: 30px; }
+.kv { font-size: 11.5px; }
+.note { font-size: 11.5px; }
+.legend { font-size: 10.5px; }
+.ratio-card .label, .ratio-card .hint { font-size: 10px; }
+.ratio-card .value { font-size: 23px; }
+table { font-size: 11.5px; }
+.card-head b { font-size: 12px; }
+.card .detail { font-size: 10.5px; }
+
+/* STEP 4 external research shortcuts */
+.research-links {
+  margin-top: 14px;
+  padding: 15px;
+  border: 1px solid #dbe5f2;
+  border-radius: 15px;
+  background: linear-gradient(180deg, #fbfdff, #f7faff);
+}
+.research-links-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.research-links-head b { display: block; font-size: 14px; }
+.research-links-head span { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+.research-link-status { margin: 0 !important; padding: 6px 9px; border-radius: 999px; background: #edf3ff; color: #315b91 !important; font-size: 10px !important; font-weight: 850; white-space: nowrap; }
+.research-link-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; margin-top: 12px; }
+.research-link { min-height: 74px; display: flex; flex-direction: column; justify-content: center; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: #fff; text-decoration: none; transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease; }
+.research-link:hover { transform: translateY(-2px); border-color: #cad9ed; box-shadow: 0 8px 20px rgba(32,56,88,.08); }
+.research-link b { font-size: 12px; }
+.research-link span { margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.research-link.hankyung { border-top: 3px solid #1c7ed6; }
+.research-link.naver-report { border-top: 3px solid #03c75a; }
+.research-link.fnguide { border-top: 3px solid #6a64d8; }
+.research-link.dart-report { border-top: 3px solid #2b5f9e; }
+
+@media (max-width: 900px) {
+  .research-link-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 560px) {
+  .research-links-head { align-items: flex-start; flex-direction: column; }
+  .research-link-grid { grid-template-columns: 1fr; }
+  .step-heading h2 { font-size: 23px; }
+  .step-heading p { font-size: 13px; }
+  .company-name b { font-size: 15px; }
+}
+
+
+/* v1.1 readability pass · large desktop typography */
+.loopera-title-row h2 { font-size: 27px; }
+.loopera-heading p { font-size: 14px; line-height: 1.6; }
+.loopera-disclaimer { font-size: 11px; line-height: 1.55; }
+.loopera-button { min-height: 46px; font-size: 12px; }
+.loopera-ready b { font-size: 14px; }
+.loopera-ready span { font-size: 11.5px; line-height: 1.55; }
+.loopera-progress-top b { font-size: 14px; }
+.loopera-progress-top small { font-size: 11px; }
+.gate-pipeline { font-size: 10px; }
+.loopera-overview small { font-size: 10.5px; }
+.loopera-overview b { font-size: 23px; }
+.loopera-overview span { font-size: 10px; }
+.advice-name b { font-size: 16px; }
+.advice-name small { font-size: 10.5px; }
+.advice-score span { font-size: 10px; }
+.hypothesis-box small { font-size: 9.5px; }
+.hypothesis-box b { font-size: 13px; }
+.hypothesis-box p { font-size: 11px; }
+.evidence-gate small { font-size: 9px; }
+.evidence-gate b { font-size: 12px; }
+.evidence-list > b { font-size: 11px; }
+.evidence-list ul { font-size: 10.5px; }
+.research-contract summary { font-size: 11px; }
+.contract-row { font-size: 10.5px; grid-template-columns: 92px 1fr; }
+.advice-actions button, .advice-actions a { min-height: 40px; font-size: 11px; }
+.accounting-line span { font-size: 10px; }
+.research-memory > summary b { font-size: 13px; }
+.research-memory > summary small { font-size: 10px; }
+.memory-item b { font-size: 12px; }
+.memory-item small, .memory-item span { font-size: 10px; }
+.loopera-method-note { font-size: 11.5px; }
+.loopera-empty { font-size: 12px; }
+.diagnostics-panel > summary span { font-size: 13px; }
+.diagnostics-panel > summary small { font-size: 10.5px; }
+footer p { font-size: 11px; }
+.company-metric small { font-size: 11px; }
+.company-metric b { font-size: 13.5px; }
+.card .detail { font-size: 11.5px; line-height: 1.55; }
+.card-head b { font-size: 13px; }

@@ -1,10 +1,21 @@
-# FF Value Hunter v1.0
+# FF Value Hunter v1.1
 
 산업 → 저평가 우량기업 → **Loopera's Advice Evidence Gate** → 선택기업 상세검증 순으로 후보를 좁히는 개인용 가치투자 연구 도구입니다.
 
 > 자동 매수/매도 기능은 없으며 주문 API를 사용하지 않습니다.
 
-## v1.0 핵심: STEP 3 Loopera's Advice
+
+## v1.1 보완 사항
+
+- **섹터 목록 확대:** 종목 마스터와 사전 매핑되는 섹터만 남기던 제한을 제거했습니다. KIS의 KOSPI/KOSDAQ 업종 목록을 먼저 넓게 표시하고 구성기업은 섹터 선택 시 검증합니다.
+- **섹터 전환 안정화:** 건설 분석 후 제조 등 다른 섹터로 이동할 때 이전 분석 결과나 버튼 상태가 남지 않도록 실행 토큰을 분리했습니다.
+- **KIS 종목 마스터 403 대응:** 선택한 시장의 마스터만 조회하고, 마스터 CDN이 403을 반환하면 KIS 업종코드 기반 구성종목 조회로 폴백합니다. KOSPI 분석이 KOSDAQ 마스터 오류 때문에 중단되지 않습니다.
+- **관련주 혼입 방지:** 종목 마스터 정확매핑이 성공한 경우에는 폴백 결과를 섞지 않습니다. KRX 데이터가 있으면 실제 KOSPI/KOSDAQ 시장도 재검증합니다.
+- **가독성 개선:** 나눔바른고딕 웹폰트를 기본 적용하고 카드·표·Evidence Gate·상세분석 글자 크기를 키웠습니다. 서울남산체/KT&G 상상체는 설치된 환경에서 폴백 후보로 사용합니다.
+- **STEP 4 리서치 바로가기:** 선택 종목 기준 한경 컨센서스, 네이버 증권사 리포트, FnGuide Company Guide, DART 공시 바로가기를 추가했습니다.
+- **불필요한 Cloudflare 문제해결 안내 제거:** 하단의 고정된 Variables/Secrets/Deploy 설명 블록을 삭제했습니다.
+
+## v1.1 핵심: STEP 3 Loopera's Advice
 
 STEP 2의 높은 FF 점수를 그대로 믿지 않고, 상위 후보를 한 번 더 **가설 → 반대가설 → 회계원문 → Train/Test 안정성 → 독립 증거 → Research Memory** 순으로 검증합니다.
 
@@ -19,7 +30,7 @@ Loopera 공개 문서의 연구 원칙(Hypothesis-driven, Evidence-gated, Resear
 5. **Train→Test 안정성**: 과거 구간의 성장 패턴이 최근 4분기에서도 유지되는지, 단일 분기 스파이크인지
 6. **독립 증거**: Quality/Value/Accumulation/실적-가격 괴리/현금흐름/리스크가 서로 다른 축에서 지지하는지
 
-`독립 증거` Gate는 현재 **Incremental Residual IC의 대체값이 아닙니다.** 실제 Rank IC, Neutralized IC, Incremental Residual IC, Sharpe, MDD, Walk-forward, 독립 OOS 성과는 과거 시점별 cross-sectional panel DB를 구축한 뒤에만 계산할 수 있으므로 v1.0에서는 임의로 만들지 않습니다.
+`독립 증거` Gate는 현재 **Incremental Residual IC의 대체값이 아닙니다.** 실제 Rank IC, Neutralized IC, Incremental Residual IC, Sharpe, MDD, Walk-forward, 독립 OOS 성과는 과거 시점별 cross-sectional panel DB를 구축한 뒤에만 계산할 수 있으므로 v1.1에서는 임의로 만들지 않습니다.
 
 ### Research Contract
 
@@ -86,7 +97,7 @@ FF = Quality 40% + Value 40% + Accumulation 20% - Risk penalty
 
 증권사 목표가는 상위후보에서 최대 +2점 보조자료로만 사용합니다.
 
-## v1.0 DART 회계 원문 대조
+## DART 회계 원문 대조
 
 Loopera's Advice 실행 시 종목코드 → DART 고유번호를 자동 매핑하고, 사용 가능한 최신 정기보고서의 전체재무제표를 조회합니다.
 
@@ -123,7 +134,7 @@ KRX_AUTH_KEY
 ECOS_API_KEY
 ```
 
-v1.0 추가 API Key는 없습니다.
+v1.1 추가 API Key는 없습니다.
 
 ## 배포
 
@@ -138,7 +149,7 @@ v1.0 추가 API Key는 없습니다.
 
 ## Loopera 라이선스 주의
 
-Loopera 저장소의 현재 LICENSE는 Business Source License 1.1이며 Additional Use Grant가 없는 형태입니다. v1.0은 해당 코드를 제품에 포함하지 않고 공개 README에서 설명한 연구 방법론을 참고해 독립적으로 작성했습니다. 서비스/프로덕션에서 Loopera 코드를 직접 재사용하려면 원 라이선스를 별도로 검토해야 합니다.
+Loopera 저장소의 현재 LICENSE는 Business Source License 1.1이며 Additional Use Grant가 없는 형태입니다. v1.1은 해당 코드를 제품에 포함하지 않고 공개 README에서 설명한 연구 방법론을 참고해 독립적으로 작성했습니다. 서비스/프로덕션에서 Loopera 코드를 직접 재사용하려면 원 라이선스를 별도로 검토해야 합니다.
 
 ## 해석 주의
 
