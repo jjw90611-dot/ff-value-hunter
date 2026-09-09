@@ -19,7 +19,7 @@ const selectedStockMarket = $("selectedStockMarket");
 const providers = [
   { id: "dart", name: "OpenDART", endpoint: "/api/test/dart", detail: "공시·기업정보 (선택 기능)" },
   { id: "kis", name: "한국투자 KIS", endpoint: "/api/test/kis", detail: "핵심: 주가·수급·차트·재무·기업정보" },
-  { id: "krx", name: "KRX", endpoint: "/api/test/krx", detail: "공식 시장 데이터 (승인 후 사용)" },
+  { id: "krx", name: "KRX", endpoint: "/api/test/krx", detail: "전체시장·종목 기본정보·일별매매·지수 검증" },
   { id: "ecos", name: "한국은행 ECOS", endpoint: "/api/test/ecos", detail: "금리·환율·거시" },
 ];
 
@@ -72,7 +72,7 @@ function drawCards() {
 drawCards();
 
 // -----------------------------
-// v0.6 산업 → 기업 발굴 흐름
+// v0.7 산업 → 기업 발굴 흐름
 // -----------------------------
 const sectorGrid = $("sectorGrid");
 const sectorEmpty = $("sectorEmpty");
@@ -416,6 +416,7 @@ function sectorCardHtml(sector, trend) {
         <span class="day-change ${dayClass}">${signedPctPlain(sector.dayPct)}</span>
       </div>
       <h3>${escapeHtml(sector.name)}</h3>
+      <div class="sector-member-count">관련기업 ${fmt(sector.memberCount || 0)}개</div>
       <div class="sector-score-row"><b>${score === null ? "--" : score.toFixed(1)}</b><span>/100</span><em>${escapeHtml(grade)}</em></div>
       <div class="sector-label">${escapeHtml(trendLabel)}</div>
       <div class="sector-mini">
@@ -458,11 +459,12 @@ async function openSector(sector) {
     const data = await api(`/api/sector-members?${q}`);
     sectorState.members = data.members || [];
     const count = Number(data.total || sectorState.members.length || 0);
-    $("sectorSubtitle").textContent = `${count}개 관련기업 · KIS 지수업종 대분류 코드 정확일치 기준`;
+    const krxText = data.krx?.available ? ` · KRX ${formatDate(data.krx.date)} 시장데이터 반영` : "";
+    $("sectorSubtitle").textContent = `${count}개 관련기업 · KIS 산업분류 정확매핑${krxText}`;
     $("memberCount").textContent = `관련기업 ${fmt(count)}개`;
     renderMembers();
     if (!count) {
-      memberGrid.innerHTML = `<div class="empty-state"><div class="empty-icon">!</div><b>업종코드에 정확히 일치하는 기업을 찾지 못했습니다.</b><span>${escapeHtml(sector.name)}(${escapeHtml(sector.code)}) · 잘못된 관련주를 억지로 섞지 않도록 v0.6에서는 대분류 코드가 같은 종목만 표시합니다.</span></div>`;
+      memberGrid.innerHTML = `<div class="empty-state"><div class="empty-icon">↻</div><b>이 섹터는 자동으로 목록에서 제외될 예정입니다.</b><span>새로고침 후 ‘섹터 불러오기’를 다시 누르면 기업이 매핑되지 않는 특수지수는 표시되지 않습니다.</span></div>`;
     }
   } catch (error) {
     memberGrid.innerHTML = `<div class="empty-state"><div class="empty-icon">!</div><b>관련기업 조회에 실패했습니다.</b><span>${escapeHtml(error.message)}</span></div>`;
@@ -512,7 +514,9 @@ function renderMembers() {
       }
       if (br && !ar) return 1;
       if (ar && !br) return -1;
-      return (b.marketCap || 0) - (a.marketCap || 0);
+      const capB = Number(b.krx?.marketCapWon) || (Number(b.marketCap) || 0) * 100000000;
+      const capA = Number(a.krx?.marketCapWon) || (Number(a.marketCap) || 0) * 100000000;
+      return capB - capA;
     });
 
   memberGrid.innerHTML = rows.map((m, index) => memberCardHtml(m, index + 1)).join("") || `
@@ -526,14 +530,18 @@ function memberCardHtml(m, displayRank) {
   const gradeClass = r?.grade === "S" || String(r?.grade || "").startsWith("A") ? "good" : r?.grade === "B" ? "warn" : "neutral";
   const revenueText = !r ? "분석 전" : r.revenueGrowing3y ? `3년 연속 상승 · CAGR ${fmt1(r.revenueCagr)}%` : annual.length >= 2 ? `${r.revenueTransitions || 0}/2 구간 상승 · CAGR ${fmt1(r.revenueCagr)}%` : "자료 부족";
   const opText = !r ? (isFiniteValue(m.operatingIncome) ? shortNumber(m.operatingIncome) : "-") : r.operatingProfitPositive3y ? "3년 연속 흑자" : isFiniteValue(latest.operatingIncome) ? shortNumber(latest.operatingIncome) : "확인 필요";
-  const cap = isFiniteValue(m.marketCap) ? `${fmt(m.marketCap)}억` : "-";
+  const krxCapWon = Number(m.krx?.marketCapWon);
+  const cap = Number.isFinite(krxCapWon) && krxCapWon > 0 ? `${fmt(Math.round(krxCapWon / 100000000))}억` : (isFiniteValue(m.marketCap) ? `${fmt(m.marketCap)}억` : "-");
   const qualityHit = r?.revenueGrowing3y && Number(r.debtRatio) < 150;
-  const english = m.englishName ? `<span>${escapeHtml(m.englishName)}</span>` : "";
+  const englishName = m.krx?.englishName || m.englishName || "";
+  const english = englishName ? `<span>${escapeHtml(englishName)}</span>` : "";
+  const krxMove = Number(m.krx?.dayPct);
+  const krxChip = Number.isFinite(krxMove) ? `<span class="krx-move ${signClass(krxMove)}">KRX ${signedPctPlain(krxMove)}</span>` : "";
   return `
     <article class="company-card ${qualityHit ? "quality-hit" : ""}">
       <div class="company-card-top">
         <span class="rank-no">${displayRank}</span>
-        <div class="company-name"><b>${escapeHtml(m.name)}</b>${english}<small>${escapeHtml(m.code)} · ${escapeHtml(m.market)} · 시총 ${cap}</small></div>
+        <div class="company-name"><b>${escapeHtml(m.name)}</b>${english}<small>${escapeHtml(m.code)} · ${escapeHtml(m.market)} · 시총 ${cap} ${krxChip}</small></div>
         <div class="grade-box">${r ? `<span class="grade-badge ${gradeClass}">${escapeHtml(r.grade)}</span><span class="grade-score">${fmt1(r.score)}</span>` : `<span class="analysis-wait">분석 전</span>`}</div>
       </div>
       <div class="company-metrics">
@@ -546,7 +554,7 @@ function memberCardHtml(m, displayRank) {
       </div>
       <div class="company-actions">
         <a class="mini-link npay" href="${npayUrl(m.code)}" target="_blank" rel="noopener noreferrer">Npay 차트 ↗</a>
-        <button class="mini-button" data-stock-detail="${escapeHtml(m.code)}" data-stock-name="${escapeHtml(m.name)}" data-stock-market="${escapeHtml(m.market)}" data-stock-english="${escapeHtml(m.englishName || "")}">FF 상세분석</button>
+        <button class="mini-button" data-stock-detail="${escapeHtml(m.code)}" data-stock-name="${escapeHtml(m.name)}" data-stock-market="${escapeHtml(m.market)}" data-stock-english="${escapeHtml(englishName)}">FF 상세분석</button>
       </div>
     </article>`;
 }
@@ -709,7 +717,7 @@ $("testAll").addEventListener("click", async () => {
       }
       if (p.id === "dart") setCard(p.id, "ok", `${data.sample?.corpName || "기업조회 성공"} · 인증 정상`);
       if (p.id === "kis") setCard(p.id, "ok", `${fmt(data.sample?.price)}원 · 핵심 시세조회 정상`);
-      if (p.id === "krx") setCard(p.id, "ok", `${formatDate(data.date)} · ${fmt(data.rows)}개 행 수신`);
+      if (p.id === "krx") setCard(p.id, "ok", `${data.serviceOk ?? 0}/${data.serviceTotal ?? 6}개 API 정상 · ${formatDate(data.date)}`);
       if (p.id === "ecos") setCard(p.id, "ok", `${fmt(data.rows)}개 주요지표 수신 · 인증 정상`);
     } catch (e) {
       setCard(p.id, "bad", e.message);

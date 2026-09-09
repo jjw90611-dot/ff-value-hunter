@@ -427,3 +427,10 @@ footer p { margin: 0; font-size: 9px; }
 @media (max-width:760px) {
   .trend-breakdown { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
+
+/* v0.7 · 산업-기업 매핑/시장데이터 보완 */
+.sector-member-count{margin:-2px 0 7px;color:#7b879a;font-size:11px;font-weight:800}
+.krx-move{display:inline-flex;margin-left:6px;padding:2px 6px;border-radius:999px;background:#eef3f9;font-size:10px;font-weight:900;vertical-align:middle}
+.krx-move.pos{color:#087c4b;background:#eaf7f1}
+.krx-move.neg{color:#c0362c;background:#fff0ee}
+.krx-move.neutral{color:#667085}
